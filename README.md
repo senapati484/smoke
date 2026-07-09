@@ -1,4 +1,4 @@
-<img width="1024" height="1024" alt="smoke" src="https://github.com/user-attachments/assets/039a48fc-91e0-4221-8706-e52cf011a832" />
+<img width="608" height="770" alt="smoke" src="https://github.com/user-attachments/assets/4fb65b47-b2af-4254-b49d-3928ef48d41f" />
 # SMOKE
 
 **Write. Run. Know.**
