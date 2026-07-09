@@ -1,0 +1,29 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Write|Edit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "./target/release/smoke hook",
+            "timeout": 10,
+            "statusMessage": "SMOKE: verifying code..."
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Write|Edit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "./target/release/smoke post-hook",
+            "timeout": 30
+          }
+        ]
+      }
+    ]
+  }
+}

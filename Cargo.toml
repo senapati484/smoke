@@ -1,0 +1,54 @@
+[package]
+name = "smoke"
+version = "0.1.0"
+edition = "2021"
+description = "A PreToolUse hook for Claude Code that runs AI-generated code in a sandbox before writes are allowed"
+license = "MIT"
+
+[dependencies]
+# JS/TS sandbox — V8 via deno_core, sandboxed by default (no fs/net)
+rustyscript = "0.12"
+
+# Resource limits for Python child process (works on Unix/macOS/Linux)
+rlimit = "0.11"
+
+# Code parsing — syntax pre-check before sandbox execution
+tree-sitter = "0.26"
+tree-sitter-python = "0.25"
+tree-sitter-javascript = "0.25"
+tree-sitter-typescript = "0.23"
+
+# MCP server (Phase 7)
+rmcp = { version = "= 0.16.0", features = ["server", "transport-io"] }
+
+# Config file parsing
+toml = "0.8"
+
+# Async runtime
+tokio = { version = "1", features = ["full"] }
+
+# Serialization — pinned to 1.0.220 to avoid breaking swc_common on newer versions
+serde = { version = "=1.0.220", features = ["derive"] }
+serde_json = "1"
+
+# Unix/POSIX system calls
+libc = "0.2"
+
+# CLI argument parsing
+clap = { version = "4", features = ["derive"] }
+
+# Temp files for Python sandbox
+tempfile = "3"
+
+# Error handling
+anyhow = "1"
+
+[target.'cfg(target_os = "linux")'.dependencies]
+# Linux-only process sandboxing dependencies
+extrasafe = "0.3"
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+strip = true
