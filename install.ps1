@@ -243,5 +243,9 @@ if ($SelectedAgents.Count -gt 0) {
 }
 
 Write-Host "`n=== SMOKE Successfully Installed! ===" -ForegroundColor Green
-Write-Host "Please start a NEW terminal window or run 'refreshenv' if using Chocolatey/Cmder."
-Write-Host "SMOKE is now active and will verify your code before your AI agents write files."
+Write-Host "`nNext steps:"
+Write-Host "  1. Open a NEW terminal window (or run 'refreshenv' in Chocolatey/Cmder)"
+Write-Host "  2. Verify install: " -NoNewline
+Write-Host "smoke test --code 'console.log(42)' --lang js" -ForegroundColor Cyan
+Write-Host "`nSMOKE is now active - it will verify AI-generated code before every file write."
+Write-Host "Docs: https://github.com/senapati484/smoke"

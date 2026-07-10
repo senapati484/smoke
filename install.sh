@@ -7,8 +7,9 @@ set -e
 # Color definitions
 RED='\033[0;31m'
 GREEN='\033[0;32m'
+YELLOW='\033[0;33m'
 BLUE='\033[0;34m'
-NC='\033[0;37m' # No Color
+NC='\033[0m' # Reset
 
 echo -e "${BLUE}=== Starting SMOKE Installation ===${NC}"
 
@@ -110,7 +111,9 @@ if [ -t 0 ]; then
             ;;
     esac
 else
-    # Non-interactive, default to Claude Code
+    # Non-interactive (e.g. curl | sh). Default to Claude Code hooks only.
+    echo -e "${YELLOW}Non-interactive mode detected — defaulting to Claude Code hooks.${NC}"
+    echo "  Re-run the script interactively to configure other AI tools."
     SELECTED_AGENTS="claude-code"
 fi
 
@@ -269,6 +272,8 @@ else
 fi
 
 echo -e "\n${GREEN}=== SMOKE Successfully Installed! ===${NC}"
-echo -e "Please run the following command to reload your shell profile:"
-echo -e "  ${BLUE}source $SHELL_CONFIG${NC}"
-echo -e "SMOKE is now active and will verify your code before your AI agents write files."
+echo -e "\nNext steps:"
+echo -e "  1. Reload your shell:  ${BLUE}source $SHELL_CONFIG${NC}"
+echo -e "  2. Verify install:     ${BLUE}smoke test --code 'console.log(42)' --lang js${NC}"
+echo -e "\nSMOKE is now active — it will verify AI-generated code before every file write."
+echo -e "Docs: https://github.com/senapati484/smoke"

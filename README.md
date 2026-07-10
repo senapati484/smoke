@@ -1,15 +1,13 @@
 <p align="center">
-  <img width="300" height="300" src="./public/smoke.png" alt="SMOKE">
+  <img width="200" height="200" src="./public/smoke.png" alt="SMOKE logo">
 </p>
 
 <h1 align="center">SMOKE</h1>
 
-<p align="center">
-  <em>Write. Run. Know.</em>
-</p>
+<p align="center"><em>Write. Run. Know.</em></p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/rust-1.81+-111111?style=flat-square" alt="Rust">
+  <img src="https://img.shields.io/badge/rust-1.81+-111111?style=flat-square" alt="Rust 1.81+">
   <img src="https://img.shields.io/badge/license-Apache%202.0-111111?style=flat-square" alt="Apache 2.0">
   <img src="https://img.shields.io/badge/status-early%20development-111111?style=flat-square" alt="Status">
   <img src="https://img.shields.io/badge/sandbox-V8%20%7C%20seccomp-111111?style=flat-square" alt="Sandbox">
@@ -17,101 +15,122 @@
 
 ---
 
-A PreToolUse hook for Claude Code that runs AI-generated JS/TS and Python code
-in a sandbox **before** the agent's file write is allowed to complete.
-The agent finds out about bugs the same second it introduces them.
+SMOKE sits **between the agent deciding to write code and the file actually being written**. Every `.js`, `.ts`, `.tsx`, and `.py` file is:
 
-## Install
+1. Syntax-checked by tree-sitter (< 1 ms)
+2. Executed in an isolated sandbox — V8 for JS/TS, subprocess + seccomp for Python
+3. Optionally followed by auto-running co-located test files
 
-### One-liner (macOS / Linux)
+The agent finds out about bugs the same second it introduces them — not three tool calls later when you notice the app is broken.
+
+Works as a **Claude Code hook** (PreToolUse / PostToolUse), an **MCP server** for Claude Desktop, Windsurf, Cline, Roo Code, and as a standalone CLI.
+
+---
+
+## Prerequisites
+
+SMOKE builds from source. You need Rust installed:
+
+```bash
+# macOS / Linux — install Rust
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+source ~/.cargo/env
+
+# Windows — download and run rustup-init.exe from https://rustup.rs
+```
+
+Python (any version ≥ 3.6) must be on your `PATH` for Python sandboxing to work. It is not required for JS/TS.
+
+---
+
+## Installation
+
+### macOS / Linux — one-liner
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/senapati484/smoke/main/install.sh | sh
 ```
 
-Builds SMOKE from source (requires Rust — install it with `curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh`),
-places the binary in `~/.smoke/bin/smoke`, and optionally registers it as a Claude Code hook and MCP server
-for Claude Desktop, Windsurf, and Cline/Roo Code.
-
-### PowerShell (Windows)
-
-```powershell
-iex ((New-Object System.Net.WebClient).DownloadString('https://raw.githubusercontent.com/senapati484/smoke/main/install.ps1'))
-```
-
-Same flow: builds from source, installs to `~\.smoke\bin\smoke.exe`, configures PATH, and registers
-hooks for your AI tools interactively.
-
-### From source
+> **Note:** When piped through `curl | sh`, the script runs non-interactively and defaults to configuring **Claude Code hooks only**. To configure other AI tools (Claude Desktop, Windsurf, Cline, Roo Code), clone the repo and run the script directly:
 
 ```bash
 git clone https://github.com/senapati484/smoke.git
 cd smoke
-cargo build --release
+chmod +x install.sh
+./install.sh
 ```
 
-The binary lands at `./target/release/smoke`.
+### Windows — PowerShell
 
-### Post-install
+```powershell
+# Run as regular user (no Admin needed)
+Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser
+iex ((New-Object System.Net.WebClient).DownloadString('https://raw.githubusercontent.com/senapati484/smoke/main/install.ps1'))
+```
 
-Verify the sandbox works:
+Or for full interactive setup:
+
+```powershell
+git clone https://github.com/senapati484/smoke.git
+cd smoke
+.\install.ps1
+```
+
+### What the installer does
+
+Both installers perform the same steps:
+
+| Step | Action |
+|------|--------|
+| 1 | Checks that `cargo` is on your PATH |
+| 2 | Runs `cargo build --release` |
+| 3 | Copies binary to `~/.smoke/bin/smoke` (or `~\.smoke\bin\smoke.exe` on Windows) |
+| 4 | Adds `~/.smoke/bin` to your shell's `PATH` (`.zshrc` / `.bashrc` / User PATH registry on Windows) |
+| 5 | Interactively asks which AI tools to register (see below) |
+
+### AI tool registration — interactive menu
+
+When run interactively, the installer presents:
+
+```
+5. Choose AI tools to configure SMOKE for:
+  1) Claude Code (CLI Pre/Post-Tool Hooks)  [Default]
+  2) Claude Desktop App (MCP Server)
+  3) Windsurf IDE (MCP Server)
+  4) Cline & Roo Code VS Code Extensions (MCP Server)
+  5) All of the above
+  6) Skip automatic registration
+Select options (e.g. 1,2 or 5) [1]:
+```
+
+You can select a single option, a comma-separated list (e.g. `1,3`), or `5` to configure everything at once.
+
+### Post-install verification
+
+After the installer finishes, reload your shell and verify:
 
 ```bash
+# macOS / Linux
+source ~/.zshrc         # or ~/.bashrc depending on your shell
+
+# Verify the sandbox
 smoke test --code 'console.log("hello")' --lang js
 smoke test --code 'print("hello")' --lang py
 ```
 
-If `smoke` isn't on your PATH after running the install script, either restart your terminal or run `source ~/.zshrc` (or `~/.bashrc`).
+If `smoke` is not found after reloading, check that `~/.smoke/bin` is in your `PATH`:
 
-## How it works
-
-SMOKE sits between the agent's intent and the filesystem. Every time the agent writes or edits a `.js`, `.ts`, or `.py` file:
-
-```
-Write/Edit tool call
-      │
-      ▼
-  ┌─────────────────────┐
-  │ 1. tree-sitter      │  Syntax pre-check (instant)
-  │    checks syntax    │
-  └─────┬───────────────┘
-        │ fail → block (exit 2)
-        │ pass
-        ▼
-  ┌─────────────────────┐
-  │ 2. Extract snippet  │  Only for large files (>200 lines)
-  │    (optional)       │  Runs just the enclosing function
-  └─────┬───────────────┘
-        │
-        ▼
-  ┌─────────────────────┐
-  │ 3. Run in sandbox   │  JS/TS: V8 (deno_core), no fs/net
-  │                     │  Python: process-isolated + seccomp
-  └─────┬───────────────┘
-        │ fail → block (exit 2)
-        │ pass
-        ▼
-  ┌─────────────────────┐
-  │ 4. PostToolUse      │  Discovers & runs co-located tests
-  │    auto-tests       │  *.test.*, *.spec.*, tests/test_*
-  └─────┬───────────────┘
-        │ fail → block
-        │ pass
-        ▼
-     Write completes
+```bash
+echo $PATH | grep smoke
 ```
 
-Three integration paths, one sandbox core:
+---
 
-| Mode | Setup | Use case |
-|------|-------|----------|
-| **`hook`** | `.claude/settings.json` | PreToolUse — blocks bad code before it lands |
-| **`post-hook`** | `.claude/settings.json` | PostToolUse — runs co-located tests after write |
-| **`server`** | `.mcp.json` | MCP tool — `smoke_verify` from any MCP client |
+## Manual registration
 
-## Register with Claude Code
+If you prefer to register SMOKE yourself (or use it in a CI environment), use the JSON snippets below.
 
-### PreToolUse — catches bugs before they hit disk
+### Claude Code — hooks (`~/.claude/settings.json`)
 
 ```json
 {
@@ -124,18 +143,7 @@ Three integration paths, one sandbox core:
         "timeout": 10,
         "statusMessage": "SMOKE: verifying code..."
       }]
-    }]
-  }
-}
-```
-
-If `smoke` is not on your `PATH`, use the full path: `"/home/user/.local/bin/smoke hook"`.
-
-### PostToolUse — auto-runs co-located tests after every write
-
-```json
-{
-  "hooks": {
+    }],
     "PostToolUse": [{
       "matcher": "Write|Edit",
       "hooks": [{
@@ -148,7 +156,68 @@ If `smoke` is not on your `PATH`, use the full path: `"/home/user/.local/bin/smo
 }
 ```
 
-### MCP server — smoke-verify from any MCP client
+If `smoke` is not on your `PATH`, use the absolute path: `"/home/you/.smoke/bin/smoke hook"`.
+
+### Claude Desktop (`claude_desktop_config.json`)
+
+| Platform | Config file location |
+|----------|---------------------|
+| macOS | `~/Library/Application Support/Claude/claude_desktop_config.json` |
+| Linux | `~/.config/Claude/claude_desktop_config.json` |
+| Windows | `%APPDATA%\Claude\claude_desktop_config.json` |
+
+```json
+{
+  "mcpServers": {
+    "smoke": {
+      "command": "/home/you/.smoke/bin/smoke",
+      "args": ["server"]
+    }
+  }
+}
+```
+
+### Windsurf IDE
+
+Config file: `~/.codeium/windsurf/mcp_config.json` (macOS/Linux) or `%USERPROFILE%\.codeium\windsurf\mcp_config.json` (Windows)
+
+```json
+{
+  "mcpServers": {
+    "smoke": {
+      "command": "/home/you/.smoke/bin/smoke",
+      "args": ["server"]
+    }
+  }
+}
+```
+
+### Cline (VS Code Extension)
+
+Config file (macOS): `~/Library/Application Support/Code/User/globalStorage/saoudrizwan.claude-dev/settings/cline_mcp_settings.json`
+
+Config file (Linux): `~/.config/Code/User/globalStorage/saoudrizwan.claude-dev/settings/cline_mcp_settings.json`
+
+Config file (Windows): `%APPDATA%\Code\User\globalStorage\saoudrizwan.claude-dev\settings\cline_mcp_settings.json`
+
+```json
+{
+  "mcpServers": {
+    "smoke": {
+      "command": "/home/you/.smoke/bin/smoke",
+      "args": ["server"],
+      "disabled": false,
+      "alwaysAllow": []
+    }
+  }
+}
+```
+
+### Roo Code (VS Code Extension)
+
+Same structure as Cline, but the config file path uses `rooveterinaryinc.roo-cline` instead of `saoudrizwan.claude-dev`.
+
+### Any other MCP client (`.mcp.json`)
 
 ```json
 {
@@ -162,89 +231,205 @@ If `smoke` is not on your `PATH`, use the full path: `"/home/user/.local/bin/smo
 }
 ```
 
-## Commands
+---
 
-| Command | What it does |
-|---------|--------------|
-| `smoke test --code '...' --lang js` | Run a snippet in the sandbox directly |
-| `smoke hook` | PreToolUse handler (stdin JSON → stdout JSON) |
-| `smoke post-hook` | PostToolUse handler (discovers & runs tests) |
+## How it works
+
+```
+Write/Edit tool call
+      │
+      ▼
+  ┌─────────────────────┐
+  │ 1. tree-sitter      │  Syntax pre-check (< 1 ms, instant)
+  │    checks syntax    │
+  └─────┬───────────────┘
+        │ fail → block (exit 2) + exact line/col error
+        │ pass
+        ▼
+  ┌─────────────────────┐
+  │ 2. Extract snippet  │  Only for large files (> 200 lines)
+  │    (optional)       │  Runs just the enclosing function/class
+  └─────┬───────────────┘
+        │
+        ▼
+  ┌─────────────────────┐
+  │ 3. Run in sandbox   │  JS/TS: V8 (deno_core), no fs/net
+  │                     │  Python: subprocess + rlimit + seccomp
+  └─────┬───────────────┘
+        │ fail → block (exit 2) + stdout/stderr
+        │ pass
+        ▼
+  ┌─────────────────────┐
+  │ 4. PostToolUse      │  Discovers & runs co-located tests
+  │    auto-tests       │  *.test.*, *.spec.*, tests/test_*
+  └─────┬───────────────┘
+        │ fail → block + test output
+        │ pass
+        ▼
+     Write completes ✓
+```
+
+Three integration modes — one sandbox core:
+
+| Mode | Command | Primary use case |
+|------|---------|-----------------|
+| **Hook** | `smoke hook` | PreToolUse — blocks bad code before it reaches disk |
+| **Post-hook** | `smoke post-hook` | PostToolUse — runs co-located tests after a write |
+| **MCP server** | `smoke server` | `smoke_verify` tool from any MCP client |
+
+---
+
+## CLI commands
+
+| Command | Description |
+|---------|-------------|
+| `smoke test --code '...' --lang js` | Run a snippet directly in the sandbox |
+| `smoke test --code '...' --lang ts` | TypeScript variant |
+| `smoke test --code '...' --lang py` | Python variant |
+| `smoke hook` | PreToolUse handler (reads Claude's hook JSON from stdin) |
+| `smoke post-hook` | PostToolUse handler (discovers and runs co-located tests) |
 | `smoke server` | MCP server over stdio |
-| `smoke config init` | Generate a `.smoke.toml` with defaults |
-| `smoke config show` | Print the effective config |
+| `smoke config init` | Write a `.smoke.toml` with defaults to the current directory |
+| `smoke config show` | Print the currently active configuration |
 
-## Config
+### Example outputs
 
-Four layers, each overriding the previous:
+```bash
+$ smoke test --code 'const x: number = 42; console.log(x)' --lang ts
+{
+  "passed": true,
+  "stdout": "42",
+  "stderr": "",
+  "language": "typescript",
+  "execution_time_ms": 38
+}
+
+$ smoke test --code 'print(1/0)' --lang py
+{
+  "passed": false,
+  "stdout": "",
+  "stderr": "ZeroDivisionError: division by zero",
+  "language": "python",
+  "execution_time_ms": 14
+}
+```
+
+---
+
+## Configuration
+
+SMOKE merges four config layers, each overriding the previous:
 
 ```
-built-in defaults  ←  ~/.config/smoke/smoke.toml  ←  .smoke.toml  ←  --config <path>
+built-in defaults
+  ← ~/.config/smoke/smoke.toml  (user-global)
+  ← .smoke.toml                 (project-level)
+  ← --config <path>             (explicit override)
 ```
 
-Generate a file with `smoke config init`:
+Generate a project config with `smoke config init`:
 
 ```toml
 [limits]
-timeout_ms = 5000
-memory_mb = 128
+timeout_ms = 5000   # Sandbox execution timeout
+memory_mb  = 128    # Memory cap for Python subprocess
 
 [languages]
 javascript = true
 typescript = true
-python = true
+python     = true
+
+[python]
+interpreter = "python3"   # Interpreter binary name or full path
 ```
 
-Every option is optional — set just what you need.
+Every field is optional — only set what you need to change from the defaults.
+
+---
 
 ## Security model
 
-**JS/TS execution** is sandboxed by the V8 engine. Code has no filesystem
-or network access by default. This is a property of the engine, not of our
-configuration.
+### JS / TypeScript
 
-**Python execution** is process-isolated with resource limits (CPU time,
-memory) and a partial seccomp filter (denies fork/exec and raw sockets).
-This is **not** a full sandbox:
+Runs inside V8 via `deno_core`. The engine itself enforces the sandbox — code has **no filesystem or network access** by default. This is a V8 property, not a SMOKE configuration.
 
-- Logic-based escapes (`__subclasses__()`, frame manipulation) stay within the Python VM and are not prevented by seccomp
-- Do not run untrusted third-party Python through SMOKE expecting container-grade isolation — use E2B or Modal for that
-- SMOKE's Python value is catching bugs in *agent-generated* code before they reach disk — code the agent wrote, not adversarial code
+### Python
 
-## Design
+Process-isolated with three layers of defense:
 
-- **Fail-open**: SMOKE never breaks Claude Code's tool pipeline. Parse failures, unknown extensions, and disabled languages produce `exit 0` (allow). Only syntax/runtime errors produce `exit 2` (block).
-- **Watchdog thread**: JS/TS infinite loops are killed by a watchdog OS thread polling at 10ms — the only reliable way to break synchronous V8 loops.
-- **Two-phase kill**: Python timeouts get SIGTERM → 500ms → SIGKILL to the process group.
-- **Snippet extraction**: For large files (>200 lines), only the enclosing function around the edit region runs — keeps verification fast.
-- **~5ms JS startup**: V8 via deno_core starts cold in milliseconds.
+| Layer | What it does |
+|-------|-------------|
+| **`rlimit`** | Caps CPU time, virtual memory (256 MB), and open file descriptors (32) |
+| **seccomp** (Linux only) | Blocks `fork`, `exec`, and raw socket syscalls at the kernel level |
+| **Process group kill** | SIGTERM → 500 ms wait → SIGKILL on the whole process group |
+
+**This is not a container-grade sandbox.** Logic-based escapes (`__subclasses__()`, frame manipulation) are not prevented by seccomp. SMOKE is designed to catch bugs in *agent-generated* code before they land on disk — not to sandbox adversarial code. Use [E2B](https://e2b.dev) or [Modal](https://modal.com) for that.
+
+---
+
+## Design notes
+
+- **Fail-open**: SMOKE never blocks Claude Code's tool pipeline on internal errors. Parse failures, unknown file extensions, and disabled languages all produce `exit 0` (allow). Only confirmed syntax or runtime errors produce `exit 2` (block).
+- **Thread-safe V8 execution**: Deno's V8 engine is run on a dedicated OS thread (`std::thread::spawn`) to avoid conflicts with Tokio's async runtime. Achieves ~20–50 ms cold start.
+- **Watchdog**: JS/TS infinite loops are killed by a watchdog OS thread polling every 10 ms — the only reliable way to interrupt synchronous V8 loops.
+- **Two-phase kill**: Python timeouts get SIGTERM → 500 ms → SIGKILL to the full process group.
+- **Snippet extraction**: For large files (> 200 lines), tree-sitter walks the AST upward from the edited region to find the enclosing function or class and runs only that. Keeps verification fast on big codebases.
+- **TSX support**: `.tsx` files are parsed with the TSX dialect grammar, preventing false-positive syntax errors on JSX expressions inside TypeScript.
+
+---
 
 ## FAQ
 
-**Does it work with any agent?**
-It's built for Claude Code's hook system. The MCP server (`smoke server`) works with any MCP client — Claude Code, Copilot, Cursor, etc.
+**Does it work with agents other than Claude Code?**
+The PreToolUse/PostToolUse hooks are Claude Code–specific. The `smoke server` MCP integration works with any MCP client — Claude Desktop, Windsurf, Cline, Roo Code, and others.
 
-**What about Node.js dependencies?**
-JS/TS sandbox has no filesystem or network access — `require` and `import` that reach for modules will fail. The sandbox tests the snippet in isolation.
+**What about `import` / `require` in JS/TS snippets?**
+The V8 sandbox has no filesystem or network access, so `require` or `import` that reaches for external modules will fail. SMOKE tests snippets in isolation — it's not a full Node.js environment.
 
-**Can I turn it off per-language?**
-Yes. Set `javascript = false`, `typescript = false`, or `python = false` in `.smoke.toml`.
+**Can I disable it for a specific language?**
+Yes. Add `javascript = false`, `typescript = false`, or `python = false` to `.smoke.toml`.
 
-**Will it block my agent on a test I haven't written yet?**
-PostToolUse only runs tests that exist. No test file, no check.
+**Will it block my agent when there are no tests yet?**
+No. `smoke post-hook` only runs tests that exist alongside the edited file. No test file → no check → `exit 0`.
 
 **Why Rust?**
-~5ms JS startup. Embedded V8. seccomp syscall filtering. Tree-sitter parsing at compile time. Zero-copy config merging. A scripting language would have been a meta problem to solve.
+~5 ms JS startup. Embedded V8. Kernel-level seccomp filtering. Tree-sitter parsing at compile time. Zero-copy config merging. Scripting the tool itself would have been a meta-problem.
+
+**The installer says Python is not found — is that a problem?**
+Only if you want Python sandboxing. JS/TS works without Python. Install Python 3 and re-run if needed.
+
+---
+
+## Building from source
+
+```bash
+git clone https://github.com/senapati484/smoke.git
+cd smoke
+cargo build --release
+# Binary is at ./target/release/smoke
+./target/release/smoke --help
+```
+
+Run tests:
+
+```bash
+cargo test
+```
+
+---
 
 ## Docs
 
 | Document | What it covers |
-|----------|---------------|
+|----------|----------------|
 | [Getting Started](docs/GETTING-STARTED.md) | Step-by-step tutorial from zero to running |
 | [Architecture](docs/ARCHITECTURE.md) | Deep dive into modules, data flow, security model |
 | [Configuration](docs/CONFIGURATION.md) | 4-layer config merge, all fields, tuning guidance |
 | [Development](docs/DEVELOPMENT.md) | Build commands, design decisions, adding languages |
 | [Testing](docs/TESTING.md) | Sandbox testing, test discovery, known limitations |
 
+---
+
 ## License
 
-[Apache 2.0](LICENSE).
+[Apache 2.0](LICENSE)
