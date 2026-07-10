@@ -305,7 +305,120 @@ if "cline" in selected:
         print(f"Failed to configure Cline/Roo Code: {e}", file=sys.stderr)
 ' "$SELECTED_AGENTS"
     else
-        log_red "Warning: Python is not installed. Skipping automatic hook registration."
+        NODE_CMD=""
+        if command -v node &> /dev/null; then
+            NODE_CMD="node"
+        fi
+        if [ -n "$NODE_CMD" ]; then
+            log_blue "Python not found. Using Node.js to register configurations..."
+            $NODE_CMD -e '
+const fs = require("fs");
+const path = require("path");
+const os = require("os");
+
+const binaryPath = path.join(os.homedir(), ".smoke", "bin", "smoke");
+const selected = process.argv[1].split(",");
+
+function updateClaudeCode() {
+  const settingsPath = path.join(os.homedir(), ".claude", "settings.json");
+  let data = {};
+  if (fs.existsSync(settingsPath)) {
+    try {
+      data = JSON.parse(fs.readFileSync(settingsPath, "utf8"));
+    } catch (e) {
+      console.error("Error reading Claude settings file:", e);
+    }
+  }
+  if (!data.hooks) data.hooks = {};
+  if (!data.hooks.PreToolUse) data.hooks.PreToolUse = [];
+  if (!data.hooks.PostToolUse) data.hooks.PostToolUse = [];
+
+  const preHookPayload = {
+    type: "command",
+    command: `${binaryPath} hook`,
+    timeout: 10,
+    statusMessage: "SMOKE: verifying code..."
+  };
+
+  const postHookPayload = {
+    type: "command",
+    command: `${binaryPath} post-hook`,
+    timeout: 30
+  };
+
+  let preEntry = data.hooks.PreToolUse.find(item => item.matcher === "Write|Edit");
+  if (!preEntry) {
+    preEntry = { matcher: "Write|Edit", hooks: [] };
+    data.hooks.PreToolUse.push(preEntry);
+  }
+  preEntry.hooks = preEntry.hooks.filter(h => !h.command.includes("smoke hook"));
+  preEntry.hooks.push(preHookPayload);
+
+  let postEntry = data.hooks.PostToolUse.find(item => item.matcher === "Write|Edit");
+  if (!postEntry) {
+    postEntry = { matcher: "Write|Edit", hooks: [] };
+    data.hooks.PostToolUse.push(postEntry);
+  }
+  postEntry.hooks = postEntry.hooks.filter(h => !h.command.includes("smoke post-hook"));
+  postEntry.hooks.push(postHookPayload);
+
+  fs.mkdirSync(path.dirname(settingsPath), { recursive: true });
+  fs.writeFileSync(settingsPath, JSON.stringify(data, null, 2));
+  console.log("Registered SMOKE in Claude Code hooks successfully.");
+}
+
+function updateMcpConfig(configPath, extraKeys = null) {
+  const resolvedPath = configPath.replace(/^~/, os.homedir());
+  let data = {};
+  if (fs.existsSync(resolvedPath)) {
+    try {
+      data = JSON.parse(fs.readFileSync(resolvedPath, "utf8"));
+    } catch (e) {
+      data = {};
+    }
+  }
+  if (!data.mcpServers) data.mcpServers = {};
+  const serverConfig = {
+    command: binaryPath,
+    args: ["server"]
+  };
+  if (extraKeys) {
+    Object.assign(serverConfig, extraKeys);
+  }
+  data.mcpServers.smoke = serverConfig;
+
+  fs.mkdirSync(path.dirname(resolvedPath), { recursive: true });
+  fs.writeFileSync(resolvedPath, JSON.stringify(data, null, 2));
+  console.log(`Registered SMOKE MCP server in ${resolvedPath}`);
+}
+
+if (selected.includes("claude-code")) {
+  try { updateClaudeCode(); } catch (e) { console.error("Failed to configure Claude Code:", e); }
+}
+if (selected.includes("claude-desktop")) {
+  try {
+    const p = process.platform === "darwin" ? "~/Library/Application Support/Claude/claude_desktop_config.json" : "~/.config/Claude/claude_desktop_config.json";
+    updateMcpConfig(p);
+  } catch (e) { console.error("Failed to configure Claude Desktop:", e); }
+}
+if (selected.includes("windsurf")) {
+  try { updateMcpConfig("~/.codeium/windsurf/mcp_config.json"); } catch (e) { console.error("Failed to configure Windsurf:", e); }
+}
+if (selected.includes("cline")) {
+  try {
+    const vscPaths = [
+      process.platform === "darwin" ? "~/Library/Application Support/Code/User/globalStorage/saoudrizwan.claude-dev/settings/cline_mcp_settings.json" : "~/.config/Code/User/globalStorage/saoudrizwan.claude-dev/settings/cline_mcp_settings.json",
+      process.platform === "darwin" ? "~/Library/Application Support/Code/User/globalStorage/rooveterinaryinc.roo-cline/settings/cline_mcp_settings.json" : "~/.config/Code/User/globalStorage/rooveterinaryinc.roo-cline/settings/cline_mcp_settings.json"
+    ];
+    for (const p of vscPaths) {
+      updateMcpConfig(p, { disabled: false, alwaysAllow: [] });
+    }
+  } catch (e) { console.error("Failed to configure Cline/Roo Code:", e); }
+}
+' "$SELECTED_AGENTS"
+        else
+            log_red "Warning: Neither Python nor Node.js is installed. Skipping automatic hook registration."
+        fi
     fi
 fi
 
@@ -321,6 +434,8 @@ printf "\n"
 log_green "=== SMOKE Successfully Installed! ==="
 printf "\nNext steps:\n"
 printf "  1. Reload your shell:  ${BLUE}source %s${NC}\n" "$SHELL_CONFIG"
-printf "  2. Verify install:     ${BLUE}smoke test --code 'console.log(42)' --lang js${NC}\n"
+printf "  2. Verify JS:          ${BLUE}smoke test --code 'console.log(42)' --lang js${NC}\n"
+printf "  3. Verify TS:          ${BLUE}smoke test --code 'const x: number = 42; console.log(x)' --lang ts${NC}\n"
+printf "  4. Verify Python:      ${BLUE}smoke test --code 'print(42)' --lang py${NC}\n"
 printf "\nSMOKE is now active — it will verify AI-generated code before every file write.\n"
 printf "Docs: https://github.com/senapati484/smoke\n"

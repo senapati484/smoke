@@ -283,7 +283,11 @@ if ($TempDir -ne $null -and (Test-Path $TempDir)) {
 Write-Host "`n=== SMOKE Successfully Installed! ===" -ForegroundColor Green
 Write-Host "`nNext steps:"
 Write-Host "  1. Open a NEW terminal window (or run 'refreshenv' in Chocolatey/Cmder)"
-Write-Host "  2. Verify install: " -NoNewline
+Write-Host "  2. Verify JS:     " -NoNewline
 Write-Host "smoke test --code 'console.log(42)' --lang js" -ForegroundColor Cyan
+Write-Host "  3. Verify TS:     " -NoNewline
+Write-Host "smoke test --code 'const x: number = 42; console.log(x)' --lang ts" -ForegroundColor Cyan
+Write-Host "  4. Verify Python: " -NoNewline
+Write-Host "smoke test --code 'print(42)' --lang py" -ForegroundColor Cyan
 Write-Host "`nSMOKE is now active - it will verify AI-generated code before every file write."
 Write-Host "Docs: https://github.com/senapati484/smoke"
