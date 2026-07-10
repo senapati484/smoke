@@ -33,6 +33,7 @@ impl SandboxResult {
         }
     }
 
+    #[allow(dead_code)]
     pub fn success(
         language: impl Into<String>,
         stdout: impl Into<String>,

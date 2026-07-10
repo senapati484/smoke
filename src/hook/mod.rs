@@ -10,7 +10,9 @@ use std::path::Path;
 
 #[derive(Debug, Deserialize)]
 struct HookInput {
+    #[allow(dead_code)]
     session_id: String,
+    #[allow(dead_code)]
     transcript_path: String,
     cwd: String,
     hook_event_name: String,
@@ -121,10 +123,14 @@ pub async fn run() -> anyhow::Result<()> {
     let mut code_content = String::new();
     let mut is_snippet = false;
 
-    let lang_id = match lang {
-        Language::JavaScript => "js",
-        Language::TypeScript => "ts",
-        Language::Python => "py",
+    let lang_id = if ext == "tsx" {
+        "tsx"
+    } else {
+        match lang {
+            Language::JavaScript => "js",
+            Language::TypeScript => "ts",
+            Language::Python => "py",
+        }
     };
 
     match input.tool_name.as_str() {

@@ -7,6 +7,7 @@ fn get_ts_language(language_id: &str) -> Option<tree_sitter::Language> {
     match language_id {
         "js" | "javascript" => Some(tree_sitter_javascript::LANGUAGE.into()),
         "ts" | "typescript" => Some(tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into()),
+        "tsx" => Some(tree_sitter_typescript::LANGUAGE_TSX.into()),
         "py" | "python" => Some(tree_sitter_python::LANGUAGE.into()),
         _ => None,
     }

@@ -149,8 +149,10 @@ impl PythonSandbox {
                         unsafe {
                             // Send SIGTERM to process group
                             let _ = libc::kill(pgid, libc::SIGTERM);
-                            // Wait 500ms
-                            std::thread::sleep(Duration::from_millis(500));
+                        }
+                        // Wait 500ms (non-blocking)
+                        tokio::time::sleep(Duration::from_millis(500)).await;
+                        unsafe {
                             // Force kill process group if still running
                             let _ = libc::kill(pgid, libc::SIGKILL);
                         }
