@@ -3,7 +3,7 @@ name = "smoke"
 version = "0.1.0"
 edition = "2021"
 description = "A PreToolUse hook for Claude Code that runs AI-generated code in a sandbox before writes are allowed"
-license = "MIT"
+license = "Apache-2.0"
 
 [dependencies]
 # JS/TS sandbox — V8 via deno_core, sandboxed by default (no fs/net)
