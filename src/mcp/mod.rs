@@ -103,6 +103,14 @@ impl SmokeServer {
             other => return Err(format!("Unknown language: '{}'. Use: js, ts, python, rust", other)),
         };
 
+        if result.passed {
+            let check_msg = format!(
+                "\x1b[32m[SMOKE] Verified {} code successfully via MCP ({}ms) ✓\x1b[0m",
+                result.language, result.execution_time_ms
+            );
+            crate::sandbox::print_to_terminal(&check_msg);
+        }
+
         Ok(Json(result))
     }
 }

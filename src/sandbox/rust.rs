@@ -180,9 +180,13 @@ async fn run_rustc_fallback(
     _stdout: &mut String,
     stderr: &mut String,
 ) {
+    static COUNTER: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+    let count = COUNTER.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+
     // Generate a temp file to compile
     let temp_dir = std::env::temp_dir();
-    let temp_file_path = temp_dir.join(format!("smoke_verify_{}.rs", start.elapsed().as_micros()));
+    let unique_id = format!("{}_{}", start.elapsed().as_micros(), count);
+    let temp_file_path = temp_dir.join(format!("smoke_verify_{}.rs", unique_id));
     if std::fs::write(&temp_file_path, code_content).is_err() {
         *passed = false;
         *stderr = "Failed to write temporary file for rustc validation".to_string();
@@ -193,7 +197,7 @@ async fn run_rustc_fallback(
     cmd.arg("--crate-type=lib")
         .arg("--emit=metadata")
         .arg("-o")
-        .arg(temp_dir.join(format!("smoke_verify_{}.rmeta", start.elapsed().as_micros())))
+        .arg(temp_dir.join(format!("smoke_verify_{}.rmeta", unique_id)))
         .arg(&temp_file_path)
         .stdout(Stdio::null())
         .stderr(Stdio::piped())
