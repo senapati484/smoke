@@ -105,9 +105,10 @@ impl RustSandbox {
                     .arg("never")
                     .current_dir(cargo_dir)
                     .stdout(Stdio::piped())
-                    .stderr(Stdio::piped());
+                    .stderr(Stdio::piped())
+                    .kill_on_drop(true);
 
-                let mut child = match cmd.spawn() {
+                let child = match cmd.spawn() {
                     Ok(c) => c,
                     Err(e) => {
                         return SandboxResult::error(
@@ -120,19 +121,15 @@ impl RustSandbox {
 
                 let timeout_dur = tokio::time::Duration::from_millis(timeout_ms);
                 let wait_res = tokio::select! {
-                    res = child.wait() => Some(res),
+                    res = child.wait_with_output() => Some(res),
                     _ = tokio::time::sleep(timeout_dur) => None,
                 };
 
-                if let Some(Ok(status)) = wait_res {
-                    let output = child.wait_with_output().await.ok();
-                    if let Some(out) = output {
-                        stdout = String::from_utf8_lossy(&out.stdout).to_string();
-                        stderr = String::from_utf8_lossy(&out.stderr).to_string();
-                    }
-                    passed = status.success();
+                if let Some(Ok(out)) = wait_res {
+                    stdout = String::from_utf8_lossy(&out.stdout).to_string();
+                    stderr = String::from_utf8_lossy(&out.stderr).to_string();
+                    passed = out.status.success();
                 } else {
-                    let _ = child.kill().await;
                     stderr = "Validation timed out running cargo check".to_string();
                 }
             } else {
@@ -199,9 +196,10 @@ async fn run_rustc_fallback(
         .arg(temp_dir.join(format!("smoke_verify_{}.rmeta", start.elapsed().as_micros())))
         .arg(&temp_file_path)
         .stdout(Stdio::null())
-        .stderr(Stdio::piped());
+        .stderr(Stdio::piped())
+        .kill_on_drop(true);
 
-    let mut child = match cmd.spawn() {
+    let child = match cmd.spawn() {
         Ok(c) => c,
         Err(e) => {
             let _ = std::fs::remove_file(&temp_file_path);
@@ -212,18 +210,14 @@ async fn run_rustc_fallback(
     };
 
     let wait_res = tokio::select! {
-        res = child.wait() => Some(res),
+        res = child.wait_with_output() => Some(res),
         _ = tokio::time::sleep(tokio::time::Duration::from_millis(timeout_ms)) => None,
     };
 
-    if let Some(Ok(status)) = wait_res {
-        let output = child.wait_with_output().await.ok();
-        if let Some(out) = output {
-            *stderr = String::from_utf8_lossy(&out.stderr).to_string();
-        }
-        *passed = status.success();
+    if let Some(Ok(out)) = wait_res {
+        *stderr = String::from_utf8_lossy(&out.stderr).to_string();
+        *passed = out.status.success();
     } else {
-        let _ = child.kill().await;
         *stderr = "Validation timed out running rustc".to_string();
     }
 
@@ -243,7 +237,9 @@ mod tests {
             }
         "#;
         let res = sandbox.execute(code, None, ".", 5000).await;
-        assert!(res.passed);
+        if !res.passed {
+            panic!("res.passed was false! stderr: {}", res.stderr);
+        }
         assert_eq!(res.language, "rust");
     }
 

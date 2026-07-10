@@ -105,6 +105,8 @@ pub async fn run() -> anyhow::Result<()> {
                     Err(_) => std::process::exit(0),
                 };
                 if status.success() {
+                    let check_msg = format!("\x1b[32m[SMOKE] Cargo tests passed for {} ✓\x1b[0m", stem);
+                    crate::sandbox::print_to_terminal(&check_msg);
                     std::process::exit(0);
                 } else {
                     eprintln!("SMOKE tests failed: cargo test failed for {}", stem);
@@ -152,6 +154,9 @@ pub async fn run() -> anyhow::Result<()> {
 
     // 9. Evaluate test outcome
     if result.passed {
+        let test_name = test_path.file_name().and_then(|f| f.to_str()).unwrap_or(stem);
+        let check_msg = format!("\x1b[32m[SMOKE] Tests passed: {} ({}ms) ✓\x1b[0m", test_name, result.execution_time_ms);
+        crate::sandbox::print_to_terminal(&check_msg);
         std::process::exit(0);
     } else {
         eprintln!("SMOKE tests failed:\n{}", result.stderr.trim());

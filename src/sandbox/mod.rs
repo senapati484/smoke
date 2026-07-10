@@ -49,3 +49,32 @@ impl SandboxResult {
         }
     }
 }
+
+/// Write a message directly to the controlling terminal (/dev/tty or CONOUT$),
+/// bypassing any stdout/stderr redirections. Falls back to stderr if the TTY is not available.
+pub fn print_to_terminal(msg: &str) {
+    let mut written = false;
+
+    #[cfg(unix)]
+    {
+        if let Ok(mut file) = std::fs::OpenOptions::new().write(true).open("/dev/tty") {
+            use std::io::Write;
+            if writeln!(file, "{}", msg).is_ok() {
+                written = true;
+            }
+        }
+    }
+    #[cfg(windows)]
+    {
+        if let Ok(mut file) = std::fs::OpenOptions::new().write(true).open("CONOUT$") {
+            use std::io::Write;
+            if writeln!(file, "{}", msg).is_ok() {
+                written = true;
+            }
+        }
+    }
+
+    if !written {
+        eprintln!("{}", msg);
+    }
+}

@@ -240,6 +240,16 @@ pub async fn run() -> anyhow::Result<()> {
         } else {
             format!("SMOKE: executed clean in {}ms", result.execution_time_ms)
         };
+
+        // Print direct-to-terminal verification success indicator
+        let file_name = Path::new(file_path).file_name().and_then(|f| f.to_str()).unwrap_or(file_path);
+        let check_msg = if is_snippet {
+            format!("\x1b[32m[SMOKE] Verified {} successfully (snippet, {}ms) ✓\x1b[0m", file_name, result.execution_time_ms)
+        } else {
+            format!("\x1b[32m[SMOKE] Verified {} successfully ({}ms) ✓\x1b[0m", file_name, result.execution_time_ms)
+        };
+        crate::sandbox::print_to_terminal(&check_msg);
+
         let output = HookOutput {
             hook_specific_output: HookSpecificOutput {
                 hook_event_name: "PreToolUse".to_string(),
