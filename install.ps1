@@ -12,6 +12,33 @@ if (-not (Get-Command cargo -ErrorAction SilentlyContinue)) {
     exit 1
 }
 
+# Check if we are running from the smoke repository root
+$InRepo = $false
+if (Test-Path "Cargo.toml") {
+    $Content = Get-Content "Cargo.toml" -Raw
+    if ($Content -like '*name = "smoke"*') {
+        $InRepo = $true
+    }
+}
+
+$TempDir = $null
+if (-not $InRepo) {
+    Write-Host "Not running inside smoke repository. Cloning smoke from GitHub to a temporary directory..." -ForegroundColor Yellow
+    if (-not (Get-Command git -ErrorAction SilentlyContinue)) {
+        Write-Host "Error: git is not installed." -ForegroundColor Red
+        Write-Host "Please install git or run the installer script from inside the cloned repository."
+        exit 1
+    }
+    
+    $TempParent = [System.IO.Path]::GetTempPath()
+    $TempDir = Join-Path $TempParent ([System.Guid]::NewGuid().ToString())
+    New-Item -ItemType Directory -Path $TempDir -Force | Out-Null
+    
+    git clone https://github.com/senapati484/smoke.git $TempDir
+    $OriginalDir = Get-Location
+    Set-Location $TempDir
+}
+
 # 2. Build in release mode
 Write-Host "`n1. Building SMOKE in release mode..." -ForegroundColor Blue
 cargo build --release
@@ -28,6 +55,10 @@ Write-Host "`n3. Copying SMOKE binary..." -ForegroundColor Blue
 $SrcBinary = "target\release\smoke.exe"
 if (-not (Test-Path $SrcBinary)) {
     Write-Host "Error: Compiled binary not found at $SrcBinary" -ForegroundColor Red
+    if ($TempDir) {
+        Set-Location $OriginalDir
+        Remove-Item $TempDir -Recurse -Force -ErrorAction SilentlyContinue
+    }
     exit 1
 }
 Copy-Item $SrcBinary $InstallDir\smoke.exe -Force
@@ -240,6 +271,13 @@ if ($SelectedAgents.Count -gt 0) {
             Write-Host "Failed to configure Cline/Roo Code: $_" -ForegroundColor Red
         }
     }
+}
+
+# Clean up temp dir if we cloned
+if ($TempDir -ne $null -and (Test-Path $TempDir)) {
+    Write-Host "`nCleaning up temporary files..." -ForegroundColor Blue
+    Set-Location $OriginalDir
+    Remove-Item $TempDir -Recurse -Force -ErrorAction SilentlyContinue
 }
 
 Write-Host "`n=== SMOKE Successfully Installed! ===" -ForegroundColor Green

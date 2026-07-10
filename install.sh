@@ -20,6 +20,26 @@ if ! command -v cargo &> /dev/null; then
     exit 1
 fi
 
+# Check if we are running from the smoke repository root
+IN_REPO=false
+if [ -f "Cargo.toml" ] && grep -q 'name = "smoke"' Cargo.toml; then
+    IN_REPO=true
+fi
+
+TEMP_DIR=""
+if [ "$IN_REPO" = false ]; then
+    echo -e "${YELLOW}Not running inside smoke repository. Cloning smoke from GitHub to a temporary directory...${NC}"
+    if ! command -v git &> /dev/null; then
+        echo -e "${RED}Error: git is not installed.${NC}"
+        echo "Please install git or run the installer script from inside the cloned repository."
+        exit 1
+    fi
+    TEMP_DIR=$(mktemp -d 2>/dev/null || mktemp -d -t 'smoke-install')
+    git clone https://github.com/senapati484/smoke.git "$TEMP_DIR"
+    ORIGINAL_DIR=$(pwd)
+    cd "$TEMP_DIR"
+fi
+
 # 2. Build in release mode
 echo -e "\n${BLUE}1. Building SMOKE in release mode...${NC}"
 cargo build --release
@@ -267,8 +287,13 @@ if "cline" in selected:
     else
         echo -e "${RED}Warning: Python is not installed. Skipping automatic hook registration.${NC}"
     fi
-else
-    echo -e "\nSkipping automatic agent registration."
+fi
+
+# Clean up temp dir if we cloned
+if [ -n "$TEMP_DIR" ] && [ -d "$TEMP_DIR" ]; then
+    echo -e "\n${BLUE}Cleaning up temporary files...${NC}"
+    cd "$ORIGINAL_DIR"
+    rm -rf "$TEMP_DIR"
 fi
 
 echo -e "\n${GREEN}=== SMOKE Successfully Installed! ===${NC}"
