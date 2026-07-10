@@ -65,6 +65,14 @@ cp target/release/smoke "$INSTALL_DIR/smoke"
 chmod +x "$INSTALL_DIR/smoke"
 log_green "Copied to $INSTALL_DIR/smoke"
 
+# 4.5 Codesign on macOS to prevent SIGKILL (AMFI)
+if [ "$(uname)" = "Darwin" ]; then
+    if command -v codesign &> /dev/null; then
+        log_blue "Signing binary for macOS..."
+        codesign --force --sign - "$INSTALL_DIR/smoke"
+    fi
+fi
+
 # 5. Configure PATH
 printf "\n"
 log_blue "4. Configuring PATH environment variable..."
