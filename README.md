@@ -1,5 +1,5 @@
 <p align="center">
-  <img width="200" height="200" src="./public/smoke.png" alt="SMOKE logo">
+  <img width="250" height="250" src="./public/smoke.png" alt="SMOKE logo">
 </p>
 
 <h1 align="center">SMOKE</h1>
