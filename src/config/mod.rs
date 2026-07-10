@@ -43,6 +43,7 @@ pub struct Languages {
     pub js_enabled: bool,
     pub ts_enabled: bool,
     pub python_enabled: bool,
+    pub rust_enabled: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -80,6 +81,7 @@ impl Default for Languages {
             js_enabled: true,
             ts_enabled: true,
             python_enabled: true,
+            rust_enabled: true,
         }
     }
 }
@@ -144,6 +146,7 @@ struct PartialLanguages {
     js_enabled: Option<bool>,
     ts_enabled: Option<bool>,
     python_enabled: Option<bool>,
+    rust_enabled: Option<bool>,
 }
 
 #[derive(Deserialize)]
@@ -177,6 +180,7 @@ fn merge(mut base: Config, overlay: Option<PartialConfig>) -> Config {
             if let Some(v) = langs.js_enabled { base.languages.js_enabled = v; }
             if let Some(v) = langs.ts_enabled { base.languages.ts_enabled = v; }
             if let Some(v) = langs.python_enabled { base.languages.python_enabled = v; }
+            if let Some(v) = langs.rust_enabled { base.languages.rust_enabled = v; }
         }
         if let Some(py) = over.python {
             if let Some(v) = py.interpreter { base.python.interpreter = v; }
@@ -225,11 +229,13 @@ max_file_lines_absolute = 1000
 js_enabled = true
 ts_enabled = true
 python_enabled = true
+rust_enabled = true
 
 [python]
 # Python interpreter to invoke. Override to "python" or an absolute path
 # if python3 is not in your PATH.
 interpreter = "python3"
+
 "#;
 
     std::fs::write(output_path, content)?;

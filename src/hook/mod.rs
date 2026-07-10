@@ -42,6 +42,7 @@ enum Language {
     JavaScript,
     TypeScript,
     Python,
+    Rust,
 }
 
 pub async fn run() -> anyhow::Result<()> {
@@ -95,6 +96,7 @@ pub async fn run() -> anyhow::Result<()> {
         "js" | "mjs" | "cjs" | "jsx" => Some(Language::JavaScript),
         "ts" | "mts" | "cts" | "tsx" => Some(Language::TypeScript),
         "py" | "pyw" => Some(Language::Python),
+        "rs" | "rust" => Some(Language::Rust),
         _ => None,
     };
 
@@ -130,6 +132,7 @@ pub async fn run() -> anyhow::Result<()> {
             Language::JavaScript => "js",
             Language::TypeScript => "ts",
             Language::Python => "py",
+            Language::Rust => "rs",
         }
     };
 
@@ -220,6 +223,13 @@ pub async fn run() -> anyhow::Result<()> {
             }
             let mut sandbox = crate::sandbox::python::PythonSandbox::new();
             sandbox.execute(&code_content, &cfg.python.interpreter, cfg.limits.timeout_ms).await
+        }
+        Language::Rust => {
+            if !cfg.languages.rust_enabled {
+                allow_with_reason("SMOKE: Rust sandbox is disabled in config");
+            }
+            let mut sandbox = crate::sandbox::rust::RustSandbox::new();
+            sandbox.execute(&code_content, Some(file_path), &input.cwd, cfg.limits.timeout_ms).await
         }
     };
 

@@ -9,6 +9,7 @@ fn get_ts_language(language_id: &str) -> Option<tree_sitter::Language> {
         "ts" | "typescript" => Some(tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into()),
         "tsx" => Some(tree_sitter_typescript::LANGUAGE_TSX.into()),
         "py" | "python" => Some(tree_sitter_python::LANGUAGE.into()),
+        "rs" | "rust" => Some(tree_sitter_rust::LANGUAGE.into()),
         _ => None,
     }
 }
@@ -57,6 +58,11 @@ pub fn extract_enclosing_function(code: &str, edit_start: usize, language_id: &s
             || kind == "class_declaration"
             || kind == "class_expression"
             || kind == "arrow_function"
+            || kind == "function_item"
+            || kind == "struct_item"
+            || kind == "enum_item"
+            || kind == "impl_item"
+            || kind == "trait_item"
         {
             let start = current_node.start_byte();
             let end = current_node.end_byte();

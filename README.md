@@ -15,10 +15,10 @@
 
 ---
 
-SMOKE sits **between the agent deciding to write code and the file actually being written**. Every `.js`, `.ts`, `.tsx`, and `.py` file is:
+SMOKE sits **between the agent deciding to write code and the file actually being written**. Every `.js`, `.ts`, `.tsx`, `.py`, and `.rs` file is:
 
 1. Syntax-checked by tree-sitter (< 1 ms)
-2. Executed in an isolated sandbox — V8 for JS/TS, subprocess + seccomp for Python
+2. Validated in an isolated environment — V8 for JS/TS, subprocess + seccomp for Python, cargo check or rustc for Rust
 3. Optionally followed by auto-running co-located test files
 
 The agent finds out about bugs the same second it introduces them — not three tool calls later when you notice the app is broken.
@@ -364,6 +364,13 @@ Process-isolated with three layers of defense:
 | **Process group kill** | SIGTERM → 500 ms wait → SIGKILL on the whole process group |
 
 **This is not a container-grade sandbox.** Logic-based escapes (`__subclasses__()`, frame manipulation) are not prevented by seccomp. SMOKE is designed to catch bugs in *agent-generated* code before they land on disk — not to sandbox adversarial code. Use [E2B](https://e2b.dev) or [Modal](https://modal.com) for that.
+
+### Rust
+
+Rust code is not executed during verification. Instead, it is verified for compile-correctness:
+1. **Workspace-aware Check**: If a `Cargo.toml` is found in the parent directory chain of the edited file, SMOKE temporarily writes the proposed change to its target path, runs `cargo check --tests` inside the workspace to verify types/imports/correctness, and safely restores the original file content.
+2. **Standalone Fallback**: If no `Cargo.toml` is found, it compiles the snippet using `rustc --emit=metadata` to check for syntax and compile errors.
+3. **Workspace Tests**: In `post-hook` mode, if `Cargo.toml` is present, it auto-runs `cargo test -- <edited-file-stem>` to run tests matching the module name.
 
 ---
 

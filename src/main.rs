@@ -123,7 +123,15 @@ async fn run_test(cfg: &Config, code: &str, lang: &str) -> Result<()> {
             let mut sandbox = sandbox::python::PythonSandbox::new();
             sandbox.execute(code, &cfg.python.interpreter, cfg.limits.timeout_ms).await
         }
-        other => anyhow::bail!("Unknown language: '{}'. Use: js, ts, python", other),
+        "rs" | "rust" => {
+            if !cfg.languages.rust_enabled {
+                anyhow::bail!("Rust sandbox is disabled in config");
+            }
+            let mut sandbox = sandbox::rust::RustSandbox::new();
+            let cwd = std::env::current_dir()?.to_string_lossy().to_string();
+            sandbox.execute(code, None, &cwd, cfg.limits.timeout_ms).await
+        }
+        other => anyhow::bail!("Unknown language: '{}'. Use: js, ts, python, rust", other),
     };
 
     println!("{}", serde_json::to_string_pretty(&result)?);

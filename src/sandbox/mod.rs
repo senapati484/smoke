@@ -1,5 +1,6 @@
 pub mod js;
 pub mod python;
+pub mod rust;
 
 use serde::{Deserialize, Serialize};
 use rmcp::schemars;
@@ -18,7 +19,7 @@ pub struct SandboxResult {
     pub stderr: String,
     /// wall-clock time from sandbox entry to exit
     pub execution_time_ms: u64,
-    /// "javascript", "typescript", or "python"
+    /// "javascript", "typescript", "python", or "rust"
     pub language: String,
 }
 

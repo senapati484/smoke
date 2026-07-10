@@ -19,7 +19,7 @@ use serde::{Deserialize, Serialize};
 pub struct SmokeVerifyRequest {
     /// Code content to execute
     pub code: String,
-    /// Target language: "javascript", "typescript", or "python"
+    /// Target language: "javascript", "typescript", "python", or "rust"
     pub language: String,
 }
 
@@ -54,7 +54,7 @@ impl SmokeServer {
 impl SmokeServer {
     #[tool(
         name = "smoke_verify",
-        description = "Executes JS/TS or Python code in a local sandbox and returns stdout/stderr. JS/TS is fully sandboxed by V8 (no filesystem or network access). Python is process-isolated with resource limits and a partial seccomp filter — not a full sandbox. Do not use for untrusted third-party code."
+        description = "Executes JS/TS, Python, or Rust code in a local sandbox/verifier and returns stdout/stderr. JS/TS is fully sandboxed by V8 (no filesystem or network access). Python is process-isolated with resource limits. Rust is checked using cargo check or rustc. Do not use for untrusted third-party code."
     )]
     pub async fn smoke_verify(
         &self,
@@ -93,7 +93,14 @@ impl SmokeServer {
                 let mut sb = PythonSandbox::new();
                 sb.execute(&req.code, &cfg.python.interpreter, cfg.limits.timeout_ms).await
             }
-            other => return Err(format!("Unknown language: '{}'. Use: js, ts, python", other)),
+            "rs" | "rust" => {
+                if !cfg.languages.rust_enabled {
+                    return Err("Rust sandbox is disabled in config".to_string());
+                }
+                let mut sb = crate::sandbox::rust::RustSandbox::new();
+                sb.execute(&req.code, None, ".", cfg.limits.timeout_ms).await
+            }
+            other => return Err(format!("Unknown language: '{}'. Use: js, ts, python, rust", other)),
         };
 
         Ok(Json(result))

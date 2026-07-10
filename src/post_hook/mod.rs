@@ -91,6 +91,29 @@ pub async fn run() -> anyhow::Result<()> {
                 test_path = Some(p2);
             }
         }
+        "rs" | "rust" => {
+            // Run cargo test inside workspace matching this file stem
+            if let Some(toml_path) = find_cargo_toml(path) {
+                let cargo_dir = toml_path.parent().unwrap_or(Path::new(""));
+                let mut cmd = std::process::Command::new("cargo");
+                cmd.arg("test")
+                   .arg("--")
+                   .arg(stem)
+                   .current_dir(cargo_dir);
+                let status = match cmd.status() {
+                    Ok(s) => s,
+                    Err(_) => std::process::exit(0),
+                };
+                if status.success() {
+                    std::process::exit(0);
+                } else {
+                    eprintln!("SMOKE tests failed: cargo test failed for {}", stem);
+                    std::process::exit(2);
+                }
+            } else {
+                std::process::exit(0);
+            }
+        }
         _ => {}
     }
 
@@ -134,4 +157,25 @@ pub async fn run() -> anyhow::Result<()> {
         eprintln!("SMOKE tests failed:\n{}", result.stderr.trim());
         std::process::exit(2);
     }
+}
+
+fn find_cargo_toml(start_path: &Path) -> Option<PathBuf> {
+    let mut current = if start_path.is_file() {
+        start_path.parent()?
+    } else {
+        start_path
+    };
+
+    loop {
+        let candidate = current.join("Cargo.toml");
+        if candidate.exists() {
+            return Some(candidate);
+        }
+        if let Some(parent) = current.parent() {
+            current = parent;
+        } else {
+            break;
+        }
+    }
+    None
 }
