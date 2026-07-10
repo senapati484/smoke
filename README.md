@@ -21,6 +21,48 @@ A PreToolUse hook for Claude Code that runs AI-generated JS/TS and Python code
 in a sandbox **before** the agent's file write is allowed to complete.
 The agent finds out about bugs the same second it introduces them.
 
+## Install
+
+### One-liner (macOS / Linux)
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/senapati484/smoke/main/install.sh | sh
+```
+
+Builds SMOKE from source (requires Rust — install it with `curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh`),
+places the binary in `~/.smoke/bin/smoke`, and optionally registers it as a Claude Code hook and MCP server
+for Claude Desktop, Windsurf, and Cline/Roo Code.
+
+### PowerShell (Windows)
+
+```powershell
+iex ((New-Object System.Net.WebClient).DownloadString('https://raw.githubusercontent.com/senapati484/smoke/main/install.ps1'))
+```
+
+Same flow: builds from source, installs to `~\.smoke\bin\smoke.exe`, configures PATH, and registers
+hooks for your AI tools interactively.
+
+### From source
+
+```bash
+git clone https://github.com/senapati484/smoke.git
+cd smoke
+cargo build --release
+```
+
+The binary lands at `./target/release/smoke`.
+
+### Post-install
+
+Verify the sandbox works:
+
+```bash
+smoke test --code 'console.log("hello")' --lang js
+smoke test --code 'print("hello")' --lang py
+```
+
+If `smoke` isn't on your PATH after running the install script, either restart your terminal or run `source ~/.zshrc` (or `~/.bashrc`).
+
 ## How it works
 
 SMOKE sits between the agent's intent and the filesystem. Every time the agent writes or edits a `.js`, `.ts`, or `.py` file:
@@ -67,15 +109,9 @@ Three integration paths, one sandbox core:
 | **`post-hook`** | `.claude/settings.json` | PostToolUse — runs co-located tests after write |
 | **`server`** | `.mcp.json` | MCP tool — `smoke_verify` from any MCP client |
 
-## Install
+## Register with Claude Code
 
-```bash
-cargo build --release
-```
-
-Then register it with Claude Code:
-
-**PreToolUse** — catches bugs before they hit disk:
+### PreToolUse — catches bugs before they hit disk
 
 ```json
 {
@@ -84,7 +120,7 @@ Then register it with Claude Code:
       "matcher": "Write|Edit",
       "hooks": [{
         "type": "command",
-        "command": "./target/release/smoke hook",
+        "command": "smoke hook",
         "timeout": 10,
         "statusMessage": "SMOKE: verifying code..."
       }]
@@ -93,7 +129,9 @@ Then register it with Claude Code:
 }
 ```
 
-**PostToolUse** — auto-discovers and runs co-located tests after every write:
+If `smoke` is not on your `PATH`, use the full path: `"/home/user/.local/bin/smoke hook"`.
+
+### PostToolUse — auto-runs co-located tests after every write
 
 ```json
 {
@@ -102,7 +140,7 @@ Then register it with Claude Code:
       "matcher": "Write|Edit",
       "hooks": [{
         "type": "command",
-        "command": "./target/release/smoke post-hook",
+        "command": "smoke post-hook",
         "timeout": 30
       }]
     }]
@@ -110,21 +148,19 @@ Then register it with Claude Code:
 }
 ```
 
-**MCP server** — smoke-verify from any client:
+### MCP server — smoke-verify from any MCP client
 
 ```json
 {
   "mcpServers": {
     "smoke": {
       "type": "stdio",
-      "command": "./target/release/smoke",
+      "command": "smoke",
       "args": ["server"]
     }
   }
 }
 ```
-
-Both hooks and the MCP server can live in the same project — they share the same sandbox implementation and config.
 
 ## Commands
 
@@ -152,7 +188,7 @@ Generate a file with `smoke config init`:
 timeout_ms = 5000
 memory_mb = 128
 
-[Languages]
+[languages]
 javascript = true
 typescript = true
 python = true
@@ -198,6 +234,16 @@ PostToolUse only runs tests that exist. No test file, no check.
 
 **Why Rust?**
 ~5ms JS startup. Embedded V8. seccomp syscall filtering. Tree-sitter parsing at compile time. Zero-copy config merging. A scripting language would have been a meta problem to solve.
+
+## Docs
+
+| Document | What it covers |
+|----------|---------------|
+| [Getting Started](docs/GETTING-STARTED.md) | Step-by-step tutorial from zero to running |
+| [Architecture](docs/ARCHITECTURE.md) | Deep dive into modules, data flow, security model |
+| [Configuration](docs/CONFIGURATION.md) | 4-layer config merge, all fields, tuning guidance |
+| [Development](docs/DEVELOPMENT.md) | Build commands, design decisions, adding languages |
+| [Testing](docs/TESTING.md) | Sandbox testing, test discovery, known limitations |
 
 ## License
 

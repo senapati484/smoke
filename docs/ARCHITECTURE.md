@@ -61,7 +61,7 @@ Claude Code decides to Write/Edit a file
  .claude/settings.json matches Write|Edit
          │
          ▼
- Claude launches: ./target/release/smoke hook
+ Claude launches the hook: `smoke hook` (or `./target/release/smoke hook` for source builds)
          │
          ▼
  Reads hook JSON from stdin

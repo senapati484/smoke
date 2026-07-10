@@ -9,45 +9,50 @@ This tutorial walks you from zero to a fully working SMOKE installation.
 
 ---
 
-## 1. Prerequisites
+## 1. Quick Install
 
-Before you begin, make sure the following are installed on your machine:
+### One-liner (macOS / Linux)
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/senapati484/smoke/main/install.sh | sh
+```
+
+Builds SMOKE from source (Rust required), installs to `~/.smoke/bin/smoke`,
+configures PATH, and optionally registers hooks for Claude Code, Claude Desktop,
+Windsurf, and Cline/Roo Code via an interactive menu.
+
+### PowerShell (Windows)
+
+```powershell
+iex ((New-Object System.Net.WebClient).DownloadString('https://raw.githubusercontent.com/senapati484/smoke/main/install.ps1'))
+```
+
+Same flow for Windows — builds from source, installs to `~\.smoke\bin\smoke.exe`,
+configures User PATH, and registers hooks interactively.
+
+### From source
+
+```bash
+git clone https://github.com/senapati484/smoke.git
+cd smoke
+cargo build --release
+```
+
+The binary lands at `./target/release/smoke`. Use `cargo build` (debug) during
+development for faster iteration; use `--release` for production hook use.
+
+### Prerequisites
 
 | Tool | Minimum Version | Check Command |
 |------|----------------|---------------|
 | **Rust toolchain** (rustc + cargo) | 1.70+ | `rustc --version && cargo --version` |
 | **Python 3** (for Python sandbox) | 3.8+ | `python3 --version` |
 
-If either is missing:
+If Rust is missing, install it first:
 
 ```bash
-# Install Rust (https://rustup.rs)
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
-
-# Install Python 3 (macOS)
-brew install python3
-
-# Install Python 3 (Ubuntu/Debian)
-sudo apt install python3 python3-pip
 ```
-
----
-
-## 2. Build SMOKE
-
-Clone the repository and compile a release build. The release profile uses LTO
-and symbol stripping for a small, fast binary.
-
-```bash
-git clone <your-repo-url> smoke
-cd smoke
-
-cargo build --release
-```
-
-The binary lands at `./target/release/smoke`. The first build will take a while
-because Cargo fetches and compiles all dependencies (V8 via `rustyscript`,
-tree-sitter grammars, etc.).
 
 > **Tip:** Use `cargo build` (debug) during development for faster iteration.
 > Use `cargo build --release` for production use as a hook or MCP server.

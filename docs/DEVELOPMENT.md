@@ -4,7 +4,24 @@
 
 ---
 
-## 1. Prerequisites
+## 1. Quick Start
+
+### One-liner install (for users)
+
+**macOS / Linux:**
+```bash
+curl -fsSL https://raw.githubusercontent.com/senapati484/smoke/main/install.sh | sh
+```
+
+**Windows (PowerShell):**
+```powershell
+iex ((New-Object System.Net.WebClient).DownloadString('https://raw.githubusercontent.com/senapati484/smoke/main/install.ps1'))
+```
+
+Both install scripts build from source, copy the binary to `~/.smoke/bin/`,
+configure PATH, and offer interactive agent registration.
+
+### Prerequisites (for developers)
 
 | Requirement | Version |
 |-------------|---------|
