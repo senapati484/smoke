@@ -11,12 +11,19 @@ YELLOW='\033[0;33m'
 BLUE='\033[0;34m'
 NC='\033[0m' # Reset
 
-echo -e "${BLUE}=== Starting SMOKE Installation ===${NC}"
+# Helper functions for portable colored output
+log_blue() { printf "${BLUE}%b${NC}\n" "$1"; }
+log_green() { printf "${GREEN}%b${NC}\n" "$1"; }
+log_red() { printf "${RED}%b${NC}\n" "$1"; }
+log_yellow() { printf "${YELLOW}%b${NC}\n" "$1"; }
+log_plain() { printf "%b\n" "$1"; }
+
+log_blue "=== Starting SMOKE Installation ==="
 
 # 1. Verify cargo/rust installation
 if ! command -v cargo &> /dev/null; then
-    echo -e "${RED}Error: Rust/Cargo is not installed.${NC}"
-    echo "Please install Rust (https://rustup.rs) first, restart your terminal, and run this script again."
+    log_red "Error: Rust/Cargo is not installed."
+    log_plain "Please install Rust (https://rustup.rs) first, restart your terminal, and run this script again."
     exit 1
 fi
 
@@ -28,10 +35,10 @@ fi
 
 TEMP_DIR=""
 if [ "$IN_REPO" = false ]; then
-    echo -e "${YELLOW}Not running inside smoke repository. Cloning smoke from GitHub to a temporary directory...${NC}"
+    log_yellow "Not running inside smoke repository. Cloning smoke from GitHub to a temporary directory..."
     if ! command -v git &> /dev/null; then
-        echo -e "${RED}Error: git is not installed.${NC}"
-        echo "Please install git or run the installer script from inside the cloned repository."
+        log_red "Error: git is not installed."
+        log_plain "Please install git or run the installer script from inside the cloned repository."
         exit 1
     fi
     TEMP_DIR=$(mktemp -d 2>/dev/null || mktemp -d -t 'smoke-install')
@@ -41,22 +48,26 @@ if [ "$IN_REPO" = false ]; then
 fi
 
 # 2. Build in release mode
-echo -e "\n${BLUE}1. Building SMOKE in release mode...${NC}"
+printf "\n"
+log_blue "1. Building SMOKE in release mode..."
 cargo build --release
 
 # 3. Create target directory
-echo -e "\n${BLUE}2. Creating target installation directory...${NC}"
+printf "\n"
+log_blue "2. Creating target installation directory..."
 INSTALL_DIR="$HOME/.smoke/bin"
 mkdir -p "$INSTALL_DIR"
 
 # 4. Copy binary
-echo -e "\n${BLUE}3. Copying SMOKE binary...${NC}"
+printf "\n"
+log_blue "3. Copying SMOKE binary..."
 cp target/release/smoke "$INSTALL_DIR/smoke"
 chmod +x "$INSTALL_DIR/smoke"
-echo -e "${GREEN}Copied to $INSTALL_DIR/smoke${NC}"
+log_green "Copied to $INSTALL_DIR/smoke"
 
 # 5. Configure PATH
-echo -e "\n${BLUE}4. Configuring PATH environment variable...${NC}"
+printf "\n"
+log_blue "4. Configuring PATH environment variable..."
 SHELL_CONFIG=""
 # Detect active shell config
 case "$SHELL" in
@@ -80,15 +91,15 @@ esac
 # Append PATH export if not already present
 if [ -f "$SHELL_CONFIG" ]; then
     if ! grep -q "\.smoke/bin" "$SHELL_CONFIG"; then
-        echo -e '\n# SMOKE execution blocker' >> "$SHELL_CONFIG"
-        echo 'export PATH="$HOME/.smoke/bin:$PATH"' >> "$SHELL_CONFIG"
-        echo -e "${GREEN}Appended path configuration to $SHELL_CONFIG${NC}"
+        printf '\n# SMOKE execution blocker\n' >> "$SHELL_CONFIG"
+        printf 'export PATH="$HOME/.smoke/bin:$PATH"\n' >> "$SHELL_CONFIG"
+        log_green "Appended path configuration to $SHELL_CONFIG"
     else
-        echo -e "Path configuration already present in $SHELL_CONFIG"
+        log_plain "Path configuration already present in $SHELL_CONFIG"
     fi
 else
-    echo 'export PATH="$HOME/.smoke/bin:$PATH"' >> "$HOME/.profile"
-    echo -e "${GREEN}Created and added path configuration to $HOME/.profile${NC}"
+    printf 'export PATH="$HOME/.smoke/bin:$PATH"\n' >> "$HOME/.profile"
+    log_green "Created and added path configuration to $HOME/.profile"
 fi
 
 # 6. Determine which agents to configure
@@ -132,13 +143,14 @@ if [ -t 0 ]; then
     esac
 else
     # Non-interactive (e.g. curl | sh). Default to Claude Code hooks only.
-    echo -e "${YELLOW}Non-interactive mode detected — defaulting to Claude Code hooks.${NC}"
-    echo "  Re-run the script interactively to configure other AI tools."
+    log_yellow "Non-interactive mode detected — defaulting to Claude Code hooks."
+    log_plain "  Re-run the script interactively to configure other AI tools."
     SELECTED_AGENTS="claude-code"
 fi
 
 if [ -n "$SELECTED_AGENTS" ]; then
-    echo -e "\n${BLUE}6. Registering SMOKE configuration...${NC}"
+    printf "\n"
+    log_blue "6. Registering SMOKE configuration..."
     PYTHON_CMD=""
     if command -v python3 &> /dev/null; then
         PYTHON_CMD="python3"
@@ -285,20 +297,22 @@ if "cline" in selected:
         print(f"Failed to configure Cline/Roo Code: {e}", file=sys.stderr)
 ' "$SELECTED_AGENTS"
     else
-        echo -e "${RED}Warning: Python is not installed. Skipping automatic hook registration.${NC}"
+        log_red "Warning: Python is not installed. Skipping automatic hook registration."
     fi
 fi
 
 # Clean up temp dir if we cloned
 if [ -n "$TEMP_DIR" ] && [ -d "$TEMP_DIR" ]; then
-    echo -e "\n${BLUE}Cleaning up temporary files...${NC}"
+    printf "\n"
+    log_blue "Cleaning up temporary files..."
     cd "$ORIGINAL_DIR"
     rm -rf "$TEMP_DIR"
 fi
 
-echo -e "\n${GREEN}=== SMOKE Successfully Installed! ===${NC}"
-echo -e "\nNext steps:"
-echo -e "  1. Reload your shell:  ${BLUE}source $SHELL_CONFIG${NC}"
-echo -e "  2. Verify install:     ${BLUE}smoke test --code 'console.log(42)' --lang js${NC}"
-echo -e "\nSMOKE is now active — it will verify AI-generated code before every file write."
-echo -e "Docs: https://github.com/senapati484/smoke"
+printf "\n"
+log_green "=== SMOKE Successfully Installed! ==="
+printf "\nNext steps:\n"
+printf "  1. Reload your shell:  ${BLUE}source %s${NC}\n" "$SHELL_CONFIG"
+printf "  2. Verify install:     ${BLUE}smoke test --code 'console.log(42)' --lang js${NC}\n"
+printf "\nSMOKE is now active — it will verify AI-generated code before every file write.\n"
+printf "Docs: https://github.com/senapati484/smoke\n"
