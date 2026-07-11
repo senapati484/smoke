@@ -1,441 +1,170 @@
 #!/bin/bash
-# SMOKE Installation Script (macOS and Linux)
-# Compiles SMOKE from source, installs it in ~/.smoke/bin, and registers it in Claude Code & MCP clients.
+# SMOKE Installation Script (macOS / Linux)
+# Builds SMOKE from source, installs it to ~/.smoke/bin, then delegates
+# all AI tool registration to `smoke install` — no Python or Node required.
 
 set -e
 
-# Color definitions
+# ── Colors ────────────────────────────────────────────────────────────────────
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[0;33m'
 BLUE='\033[0;34m'
-NC='\033[0m' # Reset
+CYAN='\033[0;36m'
+NC='\033[0m'
 
-# Helper functions for portable colored output
-log_blue() { printf "${BLUE}%b${NC}\n" "$1"; }
-log_green() { printf "${GREEN}%b${NC}\n" "$1"; }
-log_red() { printf "${RED}%b${NC}\n" "$1"; }
+log_blue()   { printf "${BLUE}%b${NC}\n" "$1"; }
+log_green()  { printf "${GREEN}%b${NC}\n" "$1"; }
+log_red()    { printf "${RED}%b${NC}\n" "$1"; }
 log_yellow() { printf "${YELLOW}%b${NC}\n" "$1"; }
-log_plain() { printf "%b\n" "$1"; }
+log_plain()  { printf "%b\n" "$1"; }
 
-log_blue "=== Starting SMOKE Installation ==="
+printf "${BLUE}╔══════════════════════════════════════╗${NC}\n"
+printf "${BLUE}║        SMOKE Installer                ║${NC}\n"
+printf "${BLUE}╚══════════════════════════════════════╝${NC}\n\n"
 
-# 1. Verify cargo/rust installation
-if ! command -v cargo &> /dev/null; then
+# ── Step 1: Check Rust / Cargo ────────────────────────────────────────────────
+log_blue "1. Checking prerequisites..."
+if ! command -v cargo &>/dev/null; then
     log_red "Error: Rust/Cargo is not installed."
-    log_plain "Please install Rust (https://rustup.rs) first, restart your terminal, and run this script again."
+    log_plain "Install Rust from https://rustup.rs, restart your terminal, and try again."
     exit 1
 fi
+log_green "   Cargo $(cargo --version) found."
 
-# Check if we are running from the smoke repository root
+# ── Step 2: Clone repo if not running inside it ───────────────────────────────
+TEMP_DIR=""
+ORIGINAL_DIR="$(pwd)"
 IN_REPO=false
-if [ -f "Cargo.toml" ] && grep -q 'name = "smoke"' Cargo.toml; then
+
+if [ -f "Cargo.toml" ] && grep -q 'name = "smoke"' Cargo.toml 2>/dev/null; then
     IN_REPO=true
 fi
 
-TEMP_DIR=""
 if [ "$IN_REPO" = false ]; then
-    log_yellow "Not running inside smoke repository. Cloning smoke from GitHub to a temporary directory..."
-    if ! command -v git &> /dev/null; then
+    log_blue "\n2. Cloning SMOKE from GitHub..."
+    if ! command -v git &>/dev/null; then
         log_red "Error: git is not installed."
-        log_plain "Please install git or run the installer script from inside the cloned repository."
+        log_plain "Install git or run this script from inside the cloned smoke repository."
         exit 1
     fi
     TEMP_DIR=$(mktemp -d 2>/dev/null || mktemp -d -t 'smoke-install')
     git clone https://github.com/senapati484/smoke.git "$TEMP_DIR"
-    ORIGINAL_DIR=$(pwd)
     cd "$TEMP_DIR"
+else
+    log_green "   Running inside smoke repository — skipping clone."
 fi
 
-# 2. Build in release mode
+# ── Step 3: Build ─────────────────────────────────────────────────────────────
 printf "\n"
-log_blue "1. Building SMOKE in release mode..."
+log_blue "3. Building SMOKE in release mode (this takes ~2 min on first run)..."
 cargo build --release
 
-# 3. Create target directory
+# ── Step 4: Install binary ────────────────────────────────────────────────────
 printf "\n"
-log_blue "2. Creating target installation directory..."
+log_blue "4. Installing binary to ~/.smoke/bin..."
 INSTALL_DIR="$HOME/.smoke/bin"
 mkdir -p "$INSTALL_DIR"
-
-# 4. Copy binary
-printf "\n"
-log_blue "3. Copying SMOKE binary..."
 cp target/release/smoke "$INSTALL_DIR/smoke"
 chmod +x "$INSTALL_DIR/smoke"
-log_green "Copied to $INSTALL_DIR/smoke"
 
-# 4.5 Codesign on macOS to prevent SIGKILL (AMFI)
-if [ "$(uname)" = "Darwin" ]; then
-    if command -v codesign &> /dev/null; then
-        log_blue "Signing binary for macOS..."
-        codesign --force --sign - "$INSTALL_DIR/smoke"
-    fi
+# macOS: codesign to prevent AMFI/SIGKILL
+if [ "$(uname)" = "Darwin" ] && command -v codesign &>/dev/null; then
+    codesign --force --sign - "$INSTALL_DIR/smoke" 2>/dev/null || true
 fi
+log_green "   Installed to $INSTALL_DIR/smoke"
 
-# 5. Configure PATH
+# ── Step 5: Add to PATH ───────────────────────────────────────────────────────
 printf "\n"
-log_blue "4. Configuring PATH environment variable..."
+log_blue "5. Configuring PATH..."
 SHELL_CONFIG=""
-# Detect active shell config
 case "$SHELL" in
-    */zsh)
-        SHELL_CONFIG="$HOME/.zshrc"
-        ;;
-    */bash)
-        SHELL_CONFIG="$HOME/.bashrc"
-        ;;
+    */zsh)  SHELL_CONFIG="$HOME/.zshrc" ;;
+    */bash) SHELL_CONFIG="$HOME/.bashrc" ;;
     *)
-        if [ -f "$HOME/.zshrc" ]; then
-            SHELL_CONFIG="$HOME/.zshrc"
-        elif [ -f "$HOME/.bashrc" ]; then
-            SHELL_CONFIG="$HOME/.bashrc"
-        else
-            SHELL_CONFIG="$HOME/.profile"
-        fi
-        ;;
+        if   [ -f "$HOME/.zshrc" ];   then SHELL_CONFIG="$HOME/.zshrc"
+        elif [ -f "$HOME/.bashrc" ];  then SHELL_CONFIG="$HOME/.bashrc"
+        else SHELL_CONFIG="$HOME/.profile"; fi ;;
 esac
 
-# Append PATH export if not already present
-if [ -f "$SHELL_CONFIG" ]; then
-    if ! grep -q "\.smoke/bin" "$SHELL_CONFIG"; then
-        printf '\n# SMOKE execution blocker\n' >> "$SHELL_CONFIG"
-        printf 'export PATH="$HOME/.smoke/bin:$PATH"\n' >> "$SHELL_CONFIG"
-        log_green "Appended path configuration to $SHELL_CONFIG"
-    else
-        log_plain "Path configuration already present in $SHELL_CONFIG"
-    fi
+if [ -f "$SHELL_CONFIG" ] && grep -q '\.smoke/bin' "$SHELL_CONFIG"; then
+    log_plain "   PATH already configured in $SHELL_CONFIG"
 else
-    printf 'export PATH="$HOME/.smoke/bin:$PATH"\n' >> "$HOME/.profile"
-    log_green "Created and added path configuration to $HOME/.profile"
+    printf '\n# SMOKE\nexport PATH="$HOME/.smoke/bin:$PATH"\n' >> "$SHELL_CONFIG"
+    log_green "   Added PATH to $SHELL_CONFIG"
 fi
 
-# 6. Determine which agents to configure
-SELECTED_AGENTS=""
+# Make binary available in the current shell session immediately
+export PATH="$HOME/.smoke/bin:$PATH"
+
+# ── Step 6: Choose tools to register ─────────────────────────────────────────
+printf "\n"
+SELECTED_AGENTS="all"
 
 if [ -t 0 ]; then
-    # Interactive menu
-    echo -e "\n${BLUE}5. Choose AI tools to configure SMOKE for:${NC}"
-    echo "  1) Claude Code (CLI Pre/Post-Tool Hooks) [Default]"
-    echo "  2) Claude Desktop App (MCP Server)"
-    echo "  3) Windsurf IDE (MCP Server)"
-    echo "  4) Cline & Roo Code VS Code Extensions (MCP Server)"
-    echo "  5) All of the above"
-    echo "  6) Skip automatic registration"
-    echo -n "Select options (e.g. 1,2 or 5) [1]: "
+    log_blue "6. Which AI tools should SMOKE register with?"
+    printf "   ${CYAN}1)${NC} All supported tools              ${CYAN}[default]${NC}\n"
+    printf "   ${CYAN}2)${NC} Claude Code only (hooks)\n"
+    printf "   ${CYAN}3)${NC} Claude Desktop (MCP server)\n"
+    printf "   ${CYAN}4)${NC} Windsurf (MCP server)\n"
+    printf "   ${CYAN}5)${NC} Cursor (MCP server)\n"
+    printf "   ${CYAN}6)${NC} Cline / Roo Code (MCP server)\n"
+    printf "   ${CYAN}7)${NC} Custom — enter tool keys manually\n"
+    printf "   ${CYAN}8)${NC} Skip registration\n"
+    printf "\n   Enter choice [1]: "
     read -r choice
-
-    if [ -z "$choice" ]; then
-        choice="1"
-    fi
+    choice="${choice:-1}"
 
     case "$choice" in
-        5)
-            SELECTED_AGENTS="claude-code,claude-desktop,windsurf,cline"
+        1|"") SELECTED_AGENTS="all" ;;
+        2)    SELECTED_AGENTS="claude-code" ;;
+        3)    SELECTED_AGENTS="claude-desktop" ;;
+        4)    SELECTED_AGENTS="windsurf" ;;
+        5)    SELECTED_AGENTS="cursor" ;;
+        6)    SELECTED_AGENTS="cline" ;;
+        7)
+            printf "   Enter comma-separated tools (e.g. claude-code,cursor): "
+            read -r SELECTED_AGENTS
             ;;
-        6)
-            SELECTED_AGENTS=""
-            ;;
-        *)
-            # Parse comma-separated list
-            IFS=',' read -ra ADDR <<< "$choice"
-            for i in "${ADDR[@]}"; do
-                case "$i" in
-                    1) SELECTED_AGENTS="${SELECTED_AGENTS:+$SELECTED_AGENTS,}claude-code" ;;
-                    2) SELECTED_AGENTS="${SELECTED_AGENTS:+$SELECTED_AGENTS,}claude-desktop" ;;
-                    3) SELECTED_AGENTS="${SELECTED_AGENTS:+$SELECTED_AGENTS,}windsurf" ;;
-                    4) SELECTED_AGENTS="${SELECTED_AGENTS:+$SELECTED_AGENTS,}cline" ;;
-                esac
-            done
-            ;;
+        8)    SELECTED_AGENTS="" ;;
+        *)    SELECTED_AGENTS="all" ;;
     esac
 else
-    # Non-interactive (e.g. curl | sh). Default to Claude Code hooks only.
-    log_yellow "Non-interactive mode detected — defaulting to Claude Code hooks."
-    log_plain "  Re-run the script interactively to configure other AI tools."
-    SELECTED_AGENTS="claude-code"
+    # Non-interactive (e.g. curl | sh)
+    log_yellow "   Non-interactive mode — registering all tools."
+    SELECTED_AGENTS="all"
 fi
 
+# ── Step 7: Register ──────────────────────────────────────────────────────────
 if [ -n "$SELECTED_AGENTS" ]; then
     printf "\n"
-    log_blue "6. Registering SMOKE configuration..."
-    PYTHON_CMD=""
-    if command -v python3 &> /dev/null; then
-        PYTHON_CMD="python3"
-    elif command -v python &> /dev/null; then
-        PYTHON_CMD="python"
-    fi
-
-    if [ -n "$PYTHON_CMD" ]; then
-        $PYTHON_CMD -c '
-import json
-import os
-import sys
-
-binary_path = os.path.expanduser("~/.smoke/bin/smoke")
-
-def update_claude_code():
-    settings_path = os.path.expanduser("~/.claude/settings.json")
-    if os.path.exists(settings_path):
-        try:
-            with open(settings_path, "r") as f:
-                data = json.load(f)
-        except Exception as e:
-            print(f"Error reading Claude settings file: {e}", file=sys.stderr)
-            data = {}
-    else:
-        data = {}
-
-    if "hooks" not in data:
-        data["hooks"] = {}
-    hooks = data["hooks"]
-
-    if "PreToolUse" not in hooks or not isinstance(hooks["PreToolUse"], list):
-        hooks["PreToolUse"] = []
-    if "PostToolUse" not in hooks or not isinstance(hooks["PostToolUse"], list):
-        hooks["PostToolUse"] = []
-
-    pre_hook_payload = {
-        "type": "command",
-        "command": f"{binary_path} hook",
-        "timeout": 10,
-        "statusMessage": "SMOKE: verifying code..."
-    }
-
-    post_hook_payload = {
-        "type": "command",
-        "command": f"{binary_path} post-hook",
-        "timeout": 30
-    }
-
-    # Update PreToolUse
-    pre_entry = None
-    for item in hooks["PreToolUse"]:
-        if item.get("matcher") == "Write|Edit":
-            pre_entry = item
-            break
-    if not pre_entry:
-        pre_entry = {"matcher": "Write|Edit", "hooks": []}
-        hooks["PreToolUse"].append(pre_entry)
-    pre_entry["hooks"] = [h for h in pre_entry["hooks"] if "smoke hook" not in h.get("command", "")]
-    pre_entry["hooks"].append(pre_hook_payload)
-
-    # Update PostToolUse
-    post_entry = None
-    for item in hooks["PostToolUse"]:
-        if item.get("matcher") == "Write|Edit":
-            post_entry = item
-            break
-    if not post_entry:
-        post_entry = {"matcher": "Write|Edit", "hooks": []}
-        hooks["PostToolUse"].append(post_entry)
-    post_entry["hooks"] = [h for h in post_entry["hooks"] if "smoke post-hook" not in h.get("command", "")]
-    post_entry["hooks"].append(post_hook_payload)
-
-    os.makedirs(os.path.dirname(settings_path), exist_ok=True)
-    with open(settings_path, "w") as f:
-        json.dump(data, f, indent=2)
-    print("Registered SMOKE in Claude Code hooks successfully.")
-
-def update_mcp_config(config_path, extra_keys=None):
-    path = os.path.expanduser(config_path)
-    if os.path.exists(path):
-        try:
-            with open(path, "r") as f:
-                data = json.load(f)
-        except Exception:
-            data = {}
-    else:
-        data = {}
-
-    if "mcpServers" not in data or not isinstance(data["mcpServers"], dict):
-        data["mcpServers"] = {}
-
-    server_config = {
-        "command": binary_path,
-        "args": ["server"]
-    }
-    if extra_keys:
-        server_config.update(extra_keys)
-
-    data["mcpServers"]["smoke"] = server_config
-
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    with open(path, "w") as f:
-        json.dump(data, f, indent=2)
-    print(f"Registered SMOKE MCP server in {path}")
-
-# Run selected updates
-selected = sys.argv[1].split(",")
-
-if "claude-code" in selected:
-    try:
-        update_claude_code()
-    except Exception as e:
-        print(f"Failed to configure Claude Code: {e}", file=sys.stderr)
-
-if "claude-desktop" in selected:
-    try:
-        if sys.platform == "darwin":
-            p = "~/Library/Application Support/Claude/claude_desktop_config.json"
-        else:
-            p = "~/.config/Claude/claude_desktop_config.json"
-        update_mcp_config(p)
-    except Exception as e:
-        print(f"Failed to configure Claude Desktop: {e}", file=sys.stderr)
-
-if "windsurf" in selected:
-    try:
-        update_mcp_config("~/.codeium/windsurf/mcp_config.json")
-    except Exception as e:
-        print(f"Failed to configure Windsurf: {e}", file=sys.stderr)
-
-if "cline" in selected:
-    try:
-        # VS Code path for macOS
-        vsc_paths = [
-            "~/Library/Application Support/Code/User/globalStorage/saoudrizwan.claude-dev/settings/cline_mcp_settings.json" if sys.platform == "darwin" else "~/.config/Code/User/globalStorage/saoudrizwan.claude-dev/settings/cline_mcp_settings.json",
-            "~/Library/Application Support/Code/User/globalStorage/rooveterinaryinc.roo-cline/settings/cline_mcp_settings.json" if sys.platform == "darwin" else "~/.config/Code/User/globalStorage/rooveterinaryinc.roo-cline/settings/cline_mcp_settings.json"
-        ]
-        for p in vsc_paths:
-            # We only write if VS Code or the extension config dir exists to avoid spamming empty directories
-            # but for this installer we will create the parent directory if the user selected it explicitly
-            update_mcp_config(p, extra_keys={"disabled": False, "alwaysAllow": []})
-    except Exception as e:
-        print(f"Failed to configure Cline/Roo Code: {e}", file=sys.stderr)
-' "$SELECTED_AGENTS"
-    else
-        NODE_CMD=""
-        if command -v node &> /dev/null; then
-            NODE_CMD="node"
-        fi
-        if [ -n "$NODE_CMD" ]; then
-            log_blue "Python not found. Using Node.js to register configurations..."
-            $NODE_CMD -e '
-const fs = require("fs");
-const path = require("path");
-const os = require("os");
-
-const binaryPath = path.join(os.homedir(), ".smoke", "bin", "smoke");
-const selected = process.argv[1].split(",");
-
-function updateClaudeCode() {
-  const settingsPath = path.join(os.homedir(), ".claude", "settings.json");
-  let data = {};
-  if (fs.existsSync(settingsPath)) {
-    try {
-      data = JSON.parse(fs.readFileSync(settingsPath, "utf8"));
-    } catch (e) {
-      console.error("Error reading Claude settings file:", e);
-    }
-  }
-  if (!data.hooks) data.hooks = {};
-  if (!data.hooks.PreToolUse) data.hooks.PreToolUse = [];
-  if (!data.hooks.PostToolUse) data.hooks.PostToolUse = [];
-
-  const preHookPayload = {
-    type: "command",
-    command: `${binaryPath} hook`,
-    timeout: 10,
-    statusMessage: "SMOKE: verifying code..."
-  };
-
-  const postHookPayload = {
-    type: "command",
-    command: `${binaryPath} post-hook`,
-    timeout: 30
-  };
-
-  let preEntry = data.hooks.PreToolUse.find(item => item.matcher === "Write|Edit");
-  if (!preEntry) {
-    preEntry = { matcher: "Write|Edit", hooks: [] };
-    data.hooks.PreToolUse.push(preEntry);
-  }
-  preEntry.hooks = preEntry.hooks.filter(h => !h.command.includes("smoke hook"));
-  preEntry.hooks.push(preHookPayload);
-
-  let postEntry = data.hooks.PostToolUse.find(item => item.matcher === "Write|Edit");
-  if (!postEntry) {
-    postEntry = { matcher: "Write|Edit", hooks: [] };
-    data.hooks.PostToolUse.push(postEntry);
-  }
-  postEntry.hooks = postEntry.hooks.filter(h => !h.command.includes("smoke post-hook"));
-  postEntry.hooks.push(postHookPayload);
-
-  fs.mkdirSync(path.dirname(settingsPath), { recursive: true });
-  fs.writeFileSync(settingsPath, JSON.stringify(data, null, 2));
-  console.log("Registered SMOKE in Claude Code hooks successfully.");
-}
-
-function updateMcpConfig(configPath, extraKeys = null) {
-  const resolvedPath = configPath.replace(/^~/, os.homedir());
-  let data = {};
-  if (fs.existsSync(resolvedPath)) {
-    try {
-      data = JSON.parse(fs.readFileSync(resolvedPath, "utf8"));
-    } catch (e) {
-      data = {};
-    }
-  }
-  if (!data.mcpServers) data.mcpServers = {};
-  const serverConfig = {
-    command: binaryPath,
-    args: ["server"]
-  };
-  if (extraKeys) {
-    Object.assign(serverConfig, extraKeys);
-  }
-  data.mcpServers.smoke = serverConfig;
-
-  fs.mkdirSync(path.dirname(resolvedPath), { recursive: true });
-  fs.writeFileSync(resolvedPath, JSON.stringify(data, null, 2));
-  console.log(`Registered SMOKE MCP server in ${resolvedPath}`);
-}
-
-if (selected.includes("claude-code")) {
-  try { updateClaudeCode(); } catch (e) { console.error("Failed to configure Claude Code:", e); }
-}
-if (selected.includes("claude-desktop")) {
-  try {
-    const p = process.platform === "darwin" ? "~/Library/Application Support/Claude/claude_desktop_config.json" : "~/.config/Claude/claude_desktop_config.json";
-    updateMcpConfig(p);
-  } catch (e) { console.error("Failed to configure Claude Desktop:", e); }
-}
-if (selected.includes("windsurf")) {
-  try { updateMcpConfig("~/.codeium/windsurf/mcp_config.json"); } catch (e) { console.error("Failed to configure Windsurf:", e); }
-}
-if (selected.includes("cline")) {
-  try {
-    const vscPaths = [
-      process.platform === "darwin" ? "~/Library/Application Support/Code/User/globalStorage/saoudrizwan.claude-dev/settings/cline_mcp_settings.json" : "~/.config/Code/User/globalStorage/saoudrizwan.claude-dev/settings/cline_mcp_settings.json",
-      process.platform === "darwin" ? "~/Library/Application Support/Code/User/globalStorage/rooveterinaryinc.roo-cline/settings/cline_mcp_settings.json" : "~/.config/Code/User/globalStorage/rooveterinaryinc.roo-cline/settings/cline_mcp_settings.json"
-    ];
-    for (const p of vscPaths) {
-      updateMcpConfig(p, { disabled: false, alwaysAllow: [] });
-    }
-  } catch (e) { console.error("Failed to configure Cline/Roo Code:", e); }
-}
-' "$SELECTED_AGENTS"
-        else
-            log_red "Warning: Neither Python nor Node.js is installed. Skipping automatic hook registration."
-        fi
-    fi
+    log_blue "7. Registering SMOKE..."
+    "$INSTALL_DIR/smoke" install --tools "$SELECTED_AGENTS"
+else
+    log_yellow "   Skipping registration. Run 'smoke install' later to configure."
 fi
 
-# Clean up temp dir if we cloned
+# ── Step 8: Cleanup ───────────────────────────────────────────────────────────
 if [ -n "$TEMP_DIR" ] && [ -d "$TEMP_DIR" ]; then
-    printf "\n"
-    log_blue "Cleaning up temporary files..."
     cd "$ORIGINAL_DIR"
     rm -rf "$TEMP_DIR"
 fi
 
+# ── Done ──────────────────────────────────────────────────────────────────────
 printf "\n"
-log_green "=== SMOKE Successfully Installed! ==="
-printf "\nNext steps:\n"
-printf "  1. Reload your shell:  ${BLUE}source %s${NC}\n" "$SHELL_CONFIG"
-printf "  2. Verify JS:          ${BLUE}smoke test --code 'console.log(42)' --lang js${NC}\n"
-printf "  3. Verify TS:          ${BLUE}smoke test --code 'const x: number = 42; console.log(x)' --lang ts${NC}\n"
-printf "  4. Verify Python:      ${BLUE}smoke test --code 'print(42)' --lang py${NC}\n"
-printf "\nSMOKE is now active — it will verify AI-generated code before every file write.\n"
-printf "Docs: https://github.com/senapati484/smoke\n"
+printf "${GREEN}╔══════════════════════════════════════╗${NC}\n"
+printf "${GREEN}║     SMOKE installed successfully!     ║${NC}\n"
+printf "${GREEN}╚══════════════════════════════════════╝${NC}\n\n"
+
+printf "Next steps:\n"
+printf "  1. Reload your shell:     ${CYAN}source %s${NC}\n" "$SHELL_CONFIG"
+printf "  2. Check status:          ${CYAN}smoke status${NC}\n"
+printf "  3. Verify JS sandbox:     ${CYAN}smoke test --code 'console.log(42)' --lang js${NC}\n"
+printf "  4. Verify Python sandbox: ${CYAN}smoke test --code 'print(42)' --lang py${NC}\n"
+printf "\n"
+printf "Manage later:\n"
+printf "  Add a tool:    ${CYAN}smoke install --tools cursor${NC}\n"
+printf "  Remove a tool: ${CYAN}smoke uninstall --tools claude-desktop${NC}\n"
+printf "  Uninstall all: ${CYAN}bash <(curl -fsSL https://raw.githubusercontent.com/senapati484/smoke/main/uninstall.sh)${NC}\n"
+printf "\n"
+printf "Docs: https://github.com/senapati484/smoke\n\n"

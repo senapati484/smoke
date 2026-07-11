@@ -1,293 +1,156 @@
-# SMOKE Installation Script (Windows)
-# Compiles SMOKE from source, installs it in ~/.smoke/bin, and registers it in Claude Code & MCP clients.
+# SMOKE Installation Script (Windows / PowerShell)
+# Builds SMOKE from source, installs it to ~/.smoke/bin, then delegates
+# all AI tool registration to `smoke install` — no Python or Node required.
+#
+# Run from an elevated PowerShell window or from inside the cloned repo:
+#   Set-ExecutionPolicy RemoteSigned -Scope CurrentUser
+#   .\install.ps1
 
 $ErrorActionPreference = "Stop"
 
-Write-Host "=== Starting SMOKE Installation ===" -ForegroundColor Blue
+# ── Header ────────────────────────────────────────────────────────────────────
+Write-Host "╔══════════════════════════════════════╗" -ForegroundColor Blue
+Write-Host "║        SMOKE Installer                ║" -ForegroundColor Blue
+Write-Host "╚══════════════════════════════════════╝" -ForegroundColor Blue
+Write-Host ""
 
-# 1. Verify cargo/rust installation
+# ── Step 1: Check Rust / Cargo ────────────────────────────────────────────────
+Write-Host "1. Checking prerequisites..." -ForegroundColor Blue
 if (-not (Get-Command cargo -ErrorAction SilentlyContinue)) {
     Write-Host "Error: Rust/Cargo is not installed." -ForegroundColor Red
-    Write-Host "Please install Rust from https://rustup.rs and run this script again in a new PowerShell window."
+    Write-Host "Install Rust from https://rustup.rs, open a new PowerShell window, and try again."
     exit 1
 }
+$cargoVersion = (cargo --version)
+Write-Host "   $cargoVersion found." -ForegroundColor Green
 
-# Check if we are running from the smoke repository root
+# ── Step 2: Clone repo if not running inside it ───────────────────────────────
 $InRepo = $false
 if (Test-Path "Cargo.toml") {
-    $Content = Get-Content "Cargo.toml" -Raw
-    if ($Content -like '*name = "smoke"*') {
-        $InRepo = $true
-    }
+    $content = Get-Content "Cargo.toml" -Raw
+    if ($content -like '*name = "smoke"*') { $InRepo = $true }
 }
 
 $TempDir = $null
+$OriginalDir = Get-Location
+
 if (-not $InRepo) {
-    Write-Host "Not running inside smoke repository. Cloning smoke from GitHub to a temporary directory..." -ForegroundColor Yellow
+    Write-Host "`n2. Cloning SMOKE from GitHub..." -ForegroundColor Blue
     if (-not (Get-Command git -ErrorAction SilentlyContinue)) {
         Write-Host "Error: git is not installed." -ForegroundColor Red
-        Write-Host "Please install git or run the installer script from inside the cloned repository."
+        Write-Host "Install git or run this script from inside the cloned smoke repository."
         exit 1
     }
-    
-    $TempParent = [System.IO.Path]::GetTempPath()
-    $TempDir = Join-Path $TempParent ([System.Guid]::NewGuid().ToString())
+    $TempDir = Join-Path ([System.IO.Path]::GetTempPath()) ([System.Guid]::NewGuid().ToString())
     New-Item -ItemType Directory -Path $TempDir -Force | Out-Null
-    
     git clone https://github.com/senapati484/smoke.git $TempDir
-    $OriginalDir = Get-Location
     Set-Location $TempDir
+} else {
+    Write-Host "   Running inside smoke repository — skipping clone." -ForegroundColor Green
 }
 
-# 2. Build in release mode
-Write-Host "`n1. Building SMOKE in release mode..." -ForegroundColor Blue
+# ── Step 3: Build ─────────────────────────────────────────────────────────────
+Write-Host "`n3. Building SMOKE in release mode (this takes ~2 min on first run)..." -ForegroundColor Blue
 cargo build --release
 
-# 3. Create target directory
-Write-Host "`n2. Creating target installation directory..." -ForegroundColor Blue
+# ── Step 4: Install binary ────────────────────────────────────────────────────
+Write-Host "`n4. Installing binary to ~\.smoke\bin..." -ForegroundColor Blue
 $InstallDir = Join-Path $Home ".smoke\bin"
 if (-not (Test-Path $InstallDir)) {
     New-Item -ItemType Directory -Path $InstallDir -Force | Out-Null
 }
 
-# 4. Copy binary
-Write-Host "`n3. Copying SMOKE binary..." -ForegroundColor Blue
 $SrcBinary = "target\release\smoke.exe"
 if (-not (Test-Path $SrcBinary)) {
     Write-Host "Error: Compiled binary not found at $SrcBinary" -ForegroundColor Red
-    if ($TempDir) {
-        Set-Location $OriginalDir
-        Remove-Item $TempDir -Recurse -Force -ErrorAction SilentlyContinue
-    }
+    if ($TempDir) { Set-Location $OriginalDir; Remove-Item $TempDir -Recurse -Force -ErrorAction SilentlyContinue }
     exit 1
 }
-Copy-Item $SrcBinary $InstallDir\smoke.exe -Force
-Write-Host "Copied to $InstallDir\smoke.exe" -ForegroundColor Green
 
-# 5. Configure PATH
-Write-Host "`n4. Configuring PATH environment variable..." -ForegroundColor Blue
+$DestBinary = Join-Path $InstallDir "smoke.exe"
+Copy-Item $SrcBinary $DestBinary -Force
+Write-Host "   Installed to $DestBinary" -ForegroundColor Green
+
+# ── Step 5: Add to PATH ───────────────────────────────────────────────────────
+Write-Host "`n5. Configuring PATH..." -ForegroundColor Blue
 $UserPath = [Environment]::GetEnvironmentVariable("Path", "User")
 if ($UserPath -notlike "*$InstallDir*") {
-    $NewUserPath = "$UserPath;$InstallDir"
-    # Clean up double semicolons if any
-    $NewUserPath = $NewUserPath -replace ';;', ';'
-    [Environment]::SetEnvironmentVariable("Path", $NewUserPath, "User")
-    Write-Host "Added $InstallDir to User PATH." -ForegroundColor Green
-    Write-Host "Note: You will need to open a NEW terminal window for PATH changes to take effect." -ForegroundColor Yellow
+    $NewPath = ($UserPath.TrimEnd(';') + ";$InstallDir") -replace ';;', ';'
+    [Environment]::SetEnvironmentVariable("Path", $NewPath, "User")
+    Write-Host "   Added $InstallDir to User PATH." -ForegroundColor Green
+    Write-Host "   Note: Open a NEW terminal window for PATH to take effect." -ForegroundColor Yellow
 } else {
-    Write-Host "PATH already contains $InstallDir."
+    Write-Host "   PATH already configured." -ForegroundColor Green
 }
 
-# 6. Determine which agents to configure
-$SelectedAgents = @()
+# Also available in this session
+$env:PATH = "$InstallDir;$env:PATH"
+
+# ── Step 6: Choose tools to register ─────────────────────────────────────────
+Write-Host ""
+$SelectedAgents = "all"
 
 if ([Environment]::UserInteractive) {
-    Write-Host "`n5. Choose AI tools to configure SMOKE for:" -ForegroundColor Blue
-    Write-Host "  1) Claude Code (CLI Pre/Post-Tool Hooks) [Default]"
-    Write-Host "  2) Claude Desktop App (MCP Server)"
-    Write-Host "  3) Windsurf IDE (MCP Server)"
-    Write-Host "  4) Cline & Roo Code VS Code Extensions (MCP Server)"
-    Write-Host "  5) All of the above"
-    Write-Host "  6) Skip automatic registration"
-    $choice = Read-Host "Select options (e.g. 1,2 or 5) [1]"
-    
-    if ([string]::IsNullOrWhiteSpace($choice)) {
-        $choice = "1"
-    }
+    Write-Host "6. Which AI tools should SMOKE register with?" -ForegroundColor Blue
+    Write-Host "   1) All supported tools              [default]" -ForegroundColor Cyan
+    Write-Host "   2) Claude Code only (hooks)"
+    Write-Host "   3) Claude Desktop (MCP server)"
+    Write-Host "   4) Windsurf (MCP server)"
+    Write-Host "   5) Cursor (MCP server)"
+    Write-Host "   6) Cline / Roo Code (MCP server)"
+    Write-Host "   7) Custom — enter tool keys manually"
+    Write-Host "   8) Skip registration"
+    Write-Host ""
+    $choice = Read-Host "   Enter choice [1]"
+    if ([string]::IsNullOrWhiteSpace($choice)) { $choice = "1" }
 
-    if ($choice -eq "5") {
-        $SelectedAgents = @("claude-code", "claude-desktop", "windsurf", "cline")
-    } elseif ($choice -eq "6") {
-        $SelectedAgents = @()
-    } else {
-        $parts = $choice -split ','
-        foreach ($p in $parts) {
-            $p = $p.Trim()
-            if ($p -eq "1") { $SelectedAgents += "claude-code" }
-            if ($p -eq "2") { $SelectedAgents += "claude-desktop" }
-            if ($p -eq "3") { $SelectedAgents += "windsurf" }
-            if ($p -eq "4") { $SelectedAgents += "cline" }
+    switch ($choice) {
+        "1" { $SelectedAgents = "all" }
+        "2" { $SelectedAgents = "claude-code" }
+        "3" { $SelectedAgents = "claude-desktop" }
+        "4" { $SelectedAgents = "windsurf" }
+        "5" { $SelectedAgents = "cursor" }
+        "6" { $SelectedAgents = "cline" }
+        "7" {
+            $SelectedAgents = Read-Host "   Enter comma-separated tools (e.g. claude-code,cursor)"
         }
+        "8" { $SelectedAgents = "" }
+        default { $SelectedAgents = "all" }
     }
 } else {
-    $SelectedAgents = @("claude-code")
+    Write-Host "   Non-interactive mode — registering all tools." -ForegroundColor Yellow
 }
 
-# Helper to register MCP servers in target JSON paths
-function Register-McpServer {
-    param(
-        [string]$Path,
-        [string]$BinaryPath,
-        [hashtable]$ExtraKeys = $null
-    )
-    $ResolvedPath = [System.IO.Path]::GetFullPath($Path.Replace("~", $Home))
-    
-    if (Test-Path $ResolvedPath) {
-        try {
-            $Data = Get-Content $ResolvedPath -Raw | ConvertFrom-Json
-        } catch {
-            $Data = [PSCustomObject]@{ }
-        }
-    } else {
-        $Data = [PSCustomObject]@{ }
-    }
-
-    if (-not $Data.PSObject.Properties['mcpServers']) {
-        $Data | Add-Member -MemberType NoteProperty -Name "mcpServers" -Value ([PSCustomObject]@{ }) -Force
-    }
-
-    $ServerConfig = [PSCustomObject]@{
-        command = $BinaryPath
-        args = @("server")
-    }
-    if ($ExtraKeys) {
-        foreach ($k in $ExtraKeys.Keys) {
-            $ServerConfig | Add-Member -MemberType NoteProperty -Name $k -Value $ExtraKeys[$k] -Force
-        }
-    }
-
-    $Data.mcpServers | Add-Member -MemberType NoteProperty -Name "smoke" -Value $ServerConfig -Force
-
-    $ParentDir = Split-Path $ResolvedPath -Parent
-    if (-not (Test-Path $ParentDir)) {
-        New-Item -ItemType Directory -Path $ParentDir -Force | Out-Null
-    }
-
-    $JsonStr = ConvertTo-Json $Data -Depth 100
-    [System.IO.File]::WriteAllText($ResolvedPath, $JsonStr)
-    Write-Host "Registered SMOKE MCP server in $ResolvedPath" -ForegroundColor Green
+# ── Step 7: Register ──────────────────────────────────────────────────────────
+if (-not [string]::IsNullOrWhiteSpace($SelectedAgents)) {
+    Write-Host "`n7. Registering SMOKE..." -ForegroundColor Blue
+    & $DestBinary install --tools $SelectedAgents
+} else {
+    Write-Host "   Skipping registration. Run 'smoke install' later to configure." -ForegroundColor Yellow
 }
 
-# Run selected updates
-if ($SelectedAgents.Count -gt 0) {
-    Write-Host "`n6. Registering SMOKE configuration..." -ForegroundColor Blue
-    $BinaryPath = Join-Path $Home ".smoke\bin\smoke.exe"
-
-    if ($SelectedAgents -contains "claude-code") {
-        try {
-            $SettingsPath = Join-Path $Home ".claude\settings.json"
-            if (Test-Path $SettingsPath) {
-                try {
-                    $Settings = Get-Content $SettingsPath -Raw | ConvertFrom-Json
-                } catch {
-                    $Settings = [PSCustomObject]@{ }
-                }
-            } else {
-                $Settings = [PSCustomObject]@{ }
-            }
-
-            if (-not $Settings.PSObject.Properties['hooks']) {
-                $Settings | Add-Member -MemberType NoteProperty -Name "hooks" -Value ([PSCustomObject]@{ })
-            }
-            $Hooks = $Settings.hooks
-
-            if (-not $Hooks.PSObject.Properties['PreToolUse'] -or $Hooks.PreToolUse -eq $null) {
-                $Hooks | Add-Member -MemberType NoteProperty -Name "PreToolUse" -Value @() -Force
-            }
-            if (-not $Hooks.PSObject.Properties['PostToolUse'] -or $Hooks.PostToolUse -eq $null) {
-                $Hooks | Add-Member -MemberType NoteProperty -Name "PostToolUse" -Value @() -Force
-            }
-
-            $PreHookPayload = [PSCustomObject]@{
-                type = "command"
-                command = "$BinaryPath hook"
-                timeout = 10
-                statusMessage = "SMOKE: verifying code..."
-            }
-
-            $PostHookPayload = [PSCustomObject]@{
-                type = "command"
-                command = "$BinaryPath post-hook"
-                timeout = 30
-            }
-
-            # Update PreToolUse
-            $PreEntry = $Hooks.PreToolUse | Where-Object { $_.matcher -eq "Write|Edit" } | Select-Object -First 1
-            if (-not $PreEntry) {
-                $PreEntry = [PSCustomObject]@{
-                    matcher = "Write|Edit"
-                    hooks = @()
-                }
-                $Hooks.PreToolUse += $PreEntry
-            }
-            $NewPreHooks = @()
-            foreach ($h in $PreEntry.hooks) {
-                if (-not $h.command.Contains("smoke hook")) { $NewPreHooks += $h }
-            }
-            $NewPreHooks += $PreHookPayload
-            $PreEntry.hooks = $NewPreHooks
-
-            # Update PostToolUse
-            $PostEntry = $Hooks.PostToolUse | Where-Object { $_.matcher -eq "Write|Edit" } | Select-Object -First 1
-            if (-not $PostEntry) {
-                $PostEntry = [PSCustomObject]@{
-                    matcher = "Write|Edit"
-                    hooks = @()
-                }
-                $Hooks.PostToolUse += $PostEntry
-            }
-            $NewPostHooks = @()
-            foreach ($h in $PostEntry.hooks) {
-                if (-not $h.command.Contains("smoke post-hook")) { $NewPostHooks += $h }
-            }
-            $NewPostHooks += $PostHookPayload
-            $PostEntry.hooks = $NewPostHooks
-
-            $ParentDir = Split-Path $SettingsPath -Parent
-            if (-not (Test-Path $ParentDir)) { New-Item -ItemType Directory -Path $ParentDir -Force | Out-Null }
-            $JsonStr = ConvertTo-Json $Settings -Depth 100
-            [System.IO.File]::WriteAllText($SettingsPath, $JsonStr)
-            Write-Host "Registered SMOKE in Claude Code hooks successfully." -ForegroundColor Green
-        } catch {
-            Write-Host "Failed to configure Claude Code: $_" -ForegroundColor Red
-        }
-    }
-
-    if ($SelectedAgents -contains "claude-desktop") {
-        try {
-            $Path = Join-Path $env:APPDATA "Claude\claude_desktop_config.json"
-            Register-McpServer -Path $Path -BinaryPath $BinaryPath
-        } catch {
-            Write-Host "Failed to configure Claude Desktop: $_" -ForegroundColor Red
-        }
-    }
-
-    if ($SelectedAgents -contains "windsurf") {
-        try {
-            $Path = Join-Path $Home ".codeium\windsurf\mcp_config.json"
-            Register-McpServer -Path $Path -BinaryPath $BinaryPath
-        } catch {
-            Write-Host "Failed to configure Windsurf: $_" -ForegroundColor Red
-        }
-    }
-
-    if ($SelectedAgents -contains "cline") {
-        try {
-            $ClinePath = Join-Path $env:APPDATA "Code\User\globalStorage\saoudrizwan.claude-dev\settings\cline_mcp_settings.json"
-            $RooPath = Join-Path $env:APPDATA "Code\User\globalStorage\rooveterinaryinc.roo-cline\settings\cline_mcp_settings.json"
-            Register-McpServer -Path $ClinePath -BinaryPath $BinaryPath -ExtraKeys @{disabled = $false; alwaysAllow = @()}
-            Register-McpServer -Path $RooPath -BinaryPath $BinaryPath -ExtraKeys @{disabled = $false; alwaysAllow = @()}
-        } catch {
-            Write-Host "Failed to configure Cline/Roo Code: $_" -ForegroundColor Red
-        }
-    }
-}
-
-# Clean up temp dir if we cloned
-if ($TempDir -ne $null -and (Test-Path $TempDir)) {
-    Write-Host "`nCleaning up temporary files..." -ForegroundColor Blue
+# ── Step 8: Cleanup ───────────────────────────────────────────────────────────
+if ($TempDir -and (Test-Path $TempDir)) {
     Set-Location $OriginalDir
     Remove-Item $TempDir -Recurse -Force -ErrorAction SilentlyContinue
 }
 
-Write-Host "`n=== SMOKE Successfully Installed! ===" -ForegroundColor Green
-Write-Host "`nNext steps:"
-Write-Host "  1. Open a NEW terminal window (or run 'refreshenv' in Chocolatey/Cmder)"
-Write-Host "  2. Verify JS:     " -NoNewline
-Write-Host "smoke test --code 'console.log(42)' --lang js" -ForegroundColor Cyan
-Write-Host "  3. Verify TS:     " -NoNewline
-Write-Host "smoke test --code 'const x: number = 42; console.log(x)' --lang ts" -ForegroundColor Cyan
-Write-Host "  4. Verify Python: " -NoNewline
-Write-Host "smoke test --code 'print(42)' --lang py" -ForegroundColor Cyan
-Write-Host "`nSMOKE is now active - it will verify AI-generated code before every file write."
+# ── Done ──────────────────────────────────────────────────────────────────────
+Write-Host ""
+Write-Host "╔══════════════════════════════════════╗" -ForegroundColor Green
+Write-Host "║     SMOKE installed successfully!     ║" -ForegroundColor Green
+Write-Host "╚══════════════════════════════════════╝" -ForegroundColor Green
+Write-Host ""
+Write-Host "Next steps:"
+Write-Host "  1. Open a NEW terminal window (for PATH to take effect)"
+Write-Host "  2. Check status:          " -NoNewline; Write-Host "smoke status" -ForegroundColor Cyan
+Write-Host "  3. Verify JS sandbox:     " -NoNewline; Write-Host "smoke test --code 'console.log(42)' --lang js" -ForegroundColor Cyan
+Write-Host "  4. Verify Python sandbox: " -NoNewline; Write-Host "smoke test --code 'print(42)' --lang py" -ForegroundColor Cyan
+Write-Host ""
+Write-Host "Manage later:"
+Write-Host "  Add a tool:    " -NoNewline; Write-Host "smoke install --tools cursor" -ForegroundColor Cyan
+Write-Host "  Remove a tool: " -NoNewline; Write-Host "smoke uninstall --tools claude-desktop" -ForegroundColor Cyan
+Write-Host "  Uninstall all: " -NoNewline; Write-Host ".\uninstall.ps1" -ForegroundColor Cyan
+Write-Host ""
 Write-Host "Docs: https://github.com/senapati484/smoke"
+Write-Host ""

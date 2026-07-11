@@ -4,6 +4,7 @@ use std::path::PathBuf;
 
 mod config;
 mod hook;
+mod install;
 mod mcp;
 mod parser;
 mod post_hook;
@@ -62,6 +63,35 @@ enum Commands {
         #[command(subcommand)]
         action: ConfigAction,
     },
+
+    /// Register SMOKE hooks and MCP server in AI tool config files.
+    /// Idempotent — safe to run multiple times.
+    ///
+    /// Examples:
+    ///   smoke install                               # all tools
+    ///   smoke install --tools claude-code           # Claude Code hooks only
+    ///   smoke install --tools claude-desktop,cursor # two MCP clients
+    Install {
+        /// Comma-separated list of tools to configure, or "all" (default).
+        /// Valid values: claude-code, claude-desktop, windsurf, cursor, cline
+        #[arg(long, default_value = "all")]
+        tools: String,
+    },
+
+    /// Remove SMOKE hooks and MCP server entries from AI tool config files.
+    /// Leaves all other entries in the config files untouched.
+    ///
+    /// Examples:
+    ///   smoke uninstall                        # all tools
+    ///   smoke uninstall --tools claude-code    # Claude Code only
+    Uninstall {
+        /// Comma-separated list of tools to remove from, or "all" (default).
+        #[arg(long, default_value = "all")]
+        tools: String,
+    },
+
+    /// Show current SMOKE registration status across all supported AI tools.
+    Status,
 }
 
 #[derive(Subcommand)]
@@ -88,6 +118,12 @@ async fn main() {
         Commands::Server => mcp::run().await,
         Commands::Test { code, lang } => run_test(&cfg, &code, &lang).await,
         Commands::Config { action } => run_config(action),
+        Commands::Install { tools } => run_install(&tools),
+        Commands::Uninstall { tools } => run_uninstall(&tools),
+        Commands::Status => {
+            install::status();
+            Ok(())
+        }
     };
 
     if let Err(e) = result {
@@ -149,5 +185,31 @@ fn run_config(action: ConfigAction) -> Result<()> {
             println!("{}", toml::to_string_pretty(&cfg)?);
         }
     }
+    Ok(())
+}
+
+fn run_install(tools_str: &str) -> Result<()> {
+    let tools = install::parse_tools(tools_str);
+    if tools.is_empty() {
+        eprintln!("SMOKE: no valid tools specified. Use --tools all or a comma-separated list.");
+        return Ok(());
+    }
+    println!("SMOKE: registering in {} tool(s)...", tools.len());
+    install::register(&tools)?;
+    println!();
+    println!("Done. Run \x1b[36msmoke status\x1b[0m to verify.");
+    Ok(())
+}
+
+fn run_uninstall(tools_str: &str) -> Result<()> {
+    let tools = install::parse_tools(tools_str);
+    if tools.is_empty() {
+        eprintln!("SMOKE: no valid tools specified. Use --tools all or a comma-separated list.");
+        return Ok(());
+    }
+    println!("SMOKE: removing from {} tool(s)...", tools.len());
+    install::unregister(&tools)?;
+    println!();
+    println!("Done. Run \x1b[36msmoke status\x1b[0m to verify.");
     Ok(())
 }

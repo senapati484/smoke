@@ -2,7 +2,7 @@
   "mcpServers": {
     "smoke": {
       "type": "stdio",
-      "command": "./target/release/smoke",
+      "command": "smoke",
       "args": ["server"]
     }
   }
