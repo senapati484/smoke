@@ -1,0 +1,7 @@
+# .smoke.toml for the smoke project itself.
+# Local development override — we don't want SMOKE to run cargo check on its own
+# source code while we're editing it (cargo check is the slow path; we'll just
+# run it ourselves with `cargo build --release`). This unblocks the agent loop.
+
+[languages]
+rust_enabled = false
