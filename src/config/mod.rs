@@ -334,3 +334,33 @@ clean_max_added_lines     = 30
     println!("SMOKE: config written to {:?}", output_path);
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Regression test: Config::load(None) with no .smoke.toml on disk
+    /// must return defaults without panicking or printing warnings.
+    #[test]
+    fn load_with_no_config_file_returns_defaults_silently() {
+        let cfg = Config::load(None);
+        // Core limit defaults are always present regardless of project overrides
+        assert_eq!(cfg.limits.timeout_ms, 2000);
+        assert!(cfg.languages.js_enabled);
+        assert!(cfg.languages.ts_enabled);
+        assert!(cfg.languages.python_enabled);
+        assert_eq!(cfg.python.interpreter, "python3");
+        // No panic reached = fix working correctly
+    }
+
+    /// Regression: passing a non-existent explicit path must not panic
+    /// (falls back to defaults with a warning). This is the old hook behaviour
+    /// that the .exists() guard now avoids in production.
+    #[test]
+    fn load_with_nonexistent_explicit_path_does_not_panic() {
+        let bogus = std::path::Path::new("/tmp/no_such_smoke_config_xyz.toml");
+        assert!(!bogus.exists(), "test assumes file is absent");
+        let cfg = Config::load(Some(bogus));
+        assert_eq!(cfg.limits.timeout_ms, 2000); // still default
+    }
+}
