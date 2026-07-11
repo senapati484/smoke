@@ -149,21 +149,37 @@ pub async fn run() -> anyhow::Result<()> {
         None
     });
 
+    if cfg.hook.mode == crate::config::HookMode::Silent {
+        let output = HookOutput {
+            hook_specific_output: HookSpecificOutput {
+                hook_event_name: "PreToolUse".to_string(),
+                permission_decision: "allow".to_string(),
+                permission_decision_reason: "SMOKE: silent mode".to_string(),
+                additional_context: None,
+                updated_input: None,
+            },
+        };
+        println!("{}", serde_json::to_string(&output)?);
+        std::process::exit(0);
+    }
+
     // 9. Extract or reconstruct code content to execute
     let mut code_content = String::new();
     let mut is_snippet = false;
     let mut additional_context_lines: Vec<String> = Vec::new();
+    let mut syntax_error_occurred = false;
 
-    let lang_id = if ext == "tsx" {
-        "tsx"
-    } else {
-        match lang {
+    let lang_id = match ext.as_str() {
+        "tsx" | "jsx" => "tsx",
+        _ => match lang {
             Language::JavaScript => "js",
             Language::TypeScript => "ts",
             Language::Python => "py",
             Language::Rust => "rs",
-        }
+        },
     };
+
+    let is_jsx_file = matches!(ext.as_str(), "tsx" | "jsx");
 
     // For Edit: we need the file's previous content to compute the diff for
     // the anti-deletion prompt AND to count how many lines were added (to
@@ -176,8 +192,16 @@ pub async fn run() -> anyhow::Result<()> {
             code_content = input.tool_input.get("content").and_then(|v| v.as_str()).unwrap_or("").to_string();
             // Fast syntax check on Write content
             if let Some(err_msg) = crate::parser::check_syntax(&code_content, lang_id) {
-                eprintln!("SMOKE: {}", err_msg);
-                std::process::exit(2);
+                if cfg.hook.mode == crate::config::HookMode::Strict {
+                    eprintln!("SMOKE: {}", err_msg);
+                    std::process::exit(2);
+                } else {
+                    additional_context_lines.push(format!(
+                        "⚠️ SMOKE syntax warning in {}: {}\nFix this before finalizing.",
+                        file_path, err_msg
+                    ));
+                    syntax_error_occurred = true;
+                }
             }
         }
         "Edit" => {
@@ -227,8 +251,16 @@ pub async fn run() -> anyhow::Result<()> {
 
             // Fast syntax check on the patched result first
             if let Some(err_msg) = crate::parser::check_syntax(&patched_content, lang_id) {
-                eprintln!("SMOKE: {}", err_msg);
-                std::process::exit(2);
+                if cfg.hook.mode == crate::config::HookMode::Strict {
+                    eprintln!("SMOKE: {}", err_msg);
+                    std::process::exit(2);
+                } else {
+                    additional_context_lines.push(format!(
+                        "⚠️ SMOKE syntax warning in {}: {}\nFix this before finalizing.",
+                        file_path, err_msg
+                    ));
+                    syntax_error_occurred = true;
+                }
             }
 
             // Anti-deletion prompt: surface to the agent that a large chunk of
@@ -253,6 +285,115 @@ pub async fn run() -> anyhow::Result<()> {
             }
         }
         _ => {}
+    }
+
+    // 9.5 Handle syntax errors or JSX/TSX bypass
+    if syntax_error_occurred {
+        let additional_context = if additional_context_lines.is_empty() {
+            None
+        } else {
+            Some(additional_context_lines.join("\n\n"))
+        };
+        if let Some(ref ctx) = additional_context {
+            for line in ctx.lines() {
+                if line.is_empty() {
+                    crate::sandbox::print_to_terminal("");
+                } else {
+                    crate::sandbox::print_to_terminal(&format!("\x1b[33m[SMOKE] {}\x1b[0m", line));
+                }
+            }
+        }
+        let output = HookOutput {
+            hook_specific_output: HookSpecificOutput {
+                hook_event_name: "PreToolUse".to_string(),
+                permission_decision: "allow".to_string(),
+                permission_decision_reason: "SMOKE: allowed with syntax warnings".to_string(),
+                additional_context,
+                updated_input: None,
+            },
+        };
+        println!("{}", serde_json::to_string(&output)?);
+        std::process::exit(0);
+    }
+
+    if is_jsx_file {
+        // Skip sandbox execution entirely for JSX/TSX.
+        // Just print verified success if syntax check passed.
+        let file_name = Path::new(file_path).file_name().and_then(|f| f.to_str()).unwrap_or(file_path);
+        let check_msg = format!("\x1b[32m[SMOKE] Verified {} syntax successfully ✓\x1b[0m", file_name);
+        crate::sandbox::print_to_terminal(&check_msg);
+
+        // Compute "added lines"
+        let resulting_lines = code_content.lines().count();
+        let added_lines = if let Some(ref before) = edit_before_content {
+            let (_, removed) = diff_stats(before, &code_content);
+            let before_lines = before.lines().count();
+            let after_lines = code_content.lines().count();
+            after_lines.saturating_sub(before_lines.saturating_sub(removed))
+        } else {
+            code_content.lines().count()
+        };
+
+        // Run writing-side stdlib hint check
+        if let Some(writing_hint) = crate::parser::writing_hint_for(
+            &code_content, lang_id, added_lines, cfg.prompts.writing_size_threshold,
+        ) {
+            additional_context_lines.push(writing_hint);
+        }
+
+        let is_clean = !is_snippet
+            && cfg.prompts.clean_file_line_threshold > 0
+            && resulting_lines < cfg.prompts.clean_file_line_threshold
+            && cfg.prompts.clean_max_added_lines > 0
+            && added_lines <= cfg.prompts.clean_max_added_lines
+            && additional_context_lines.is_empty();
+
+        if is_clean {
+            let clean_msg = format!(
+                "This change is clean: small file ({} lines), no stdlib duplicates, no large deletion. This is the kind of edit SMOKE rewards.",
+                resulting_lines
+            );
+            crate::sandbox::print_to_terminal(&format!("\x1b[32m[SMOKE] {}\x1b[0m", clean_msg));
+
+            let output = HookOutput {
+                hook_specific_output: HookSpecificOutput {
+                    hook_event_name: "PreToolUse".to_string(),
+                    permission_decision: "allow".to_string(),
+                    permission_decision_reason: "SMOKE: JSX/TSX syntax clean".to_string(),
+                    additional_context: Some(clean_msg),
+                    updated_input: None,
+                },
+            };
+            println!("{}", serde_json::to_string(&output)?);
+            std::process::exit(0);
+        }
+
+        let additional_context = if additional_context_lines.is_empty() {
+            None
+        } else {
+            Some(additional_context_lines.join("\n\n"))
+        };
+        if let Some(ref ctx) = additional_context {
+            for line in ctx.lines() {
+                if line.is_empty() {
+                    crate::sandbox::print_to_terminal("");
+                } else {
+                    crate::sandbox::print_to_terminal(&format!("\x1b[33m[SMOKE] {}\x1b[0m", line));
+                }
+            }
+        }
+
+        let output = HookOutput {
+            hook_specific_output: HookSpecificOutput {
+                hook_event_name: "PreToolUse".to_string(),
+                permission_decision: "allow".to_string(),
+                permission_decision_reason: "SMOKE: JSX/TSX allowed".to_string(),
+                additional_context,
+                updated_input: None,
+            },
+        };
+        println!("{}", serde_json::to_string(&output)?);
+        std::process::exit(0);
     }
 
     // 10. Execute the sandbox
@@ -407,10 +548,72 @@ pub async fn run() -> anyhow::Result<()> {
         println!("{}", serde_json::to_string(&output)?);
         std::process::exit(0);
     } else {
-        // Exit code 2 blocks the tool call in Claude Code, showing stderr to the agent
-        eprintln!("SMOKE: {}", result.stderr.trim());
-        std::process::exit(2);
+        let should_block = match cfg.hook.mode {
+            crate::config::HookMode::Silent => false,
+            crate::config::HookMode::Advisor => false,
+            crate::config::HookMode::Strict => {
+                is_standalone_runnable(&code_content, &ext)
+            }
+        };
+
+        if should_block {
+            // Exit code 2 blocks the tool call in Claude Code, showing stderr to the agent
+            eprintln!("SMOKE: {}", result.stderr.trim());
+            std::process::exit(2);
+        } else {
+            let cleaned_stderr = result.stderr.trim().replace("smoke_verify.ts", file_path);
+            let warn_msg = format!(
+                "⚠️ SMOKE execution warning in {}:\n{}",
+                file_path, cleaned_stderr
+            );
+            crate::sandbox::print_to_terminal(&format!("\x1b[33m[SMOKE] {}\x1b[0m", warn_msg));
+            additional_context_lines.push(warn_msg);
+
+            let additional_context = if additional_context_lines.is_empty() {
+                None
+            } else {
+                Some(additional_context_lines.join("\n\n"))
+            };
+
+            let output = HookOutput {
+                hook_specific_output: HookSpecificOutput {
+                    hook_event_name: "PreToolUse".to_string(),
+                    permission_decision: "allow".to_string(),
+                    permission_decision_reason: "SMOKE: allowed with execution warnings".to_string(),
+                    additional_context,
+                    updated_input: None,
+                },
+            };
+            println!("{}", serde_json::to_string(&output)?);
+            std::process::exit(0);
+        }
     }
+}
+
+fn is_standalone_runnable(code: &str, ext: &str) -> bool {
+    // If it's a JSX/TSX file, it's never standalone runnable.
+    if matches!(ext, "tsx" | "jsx") {
+        return false;
+    }
+    if ext == "rs" || ext == "rust" {
+        return code.contains("fn main");
+    }
+
+    // Check for imports or exports that make it a module/component
+    let has_import = code.lines().any(|line| {
+        let trimmed = line.trim();
+        trimmed.starts_with("import ") || trimmed.starts_with("import{") || trimmed.starts_with("import *")
+            || trimmed.contains("require(")
+    });
+
+    let has_export = code.lines().any(|line| {
+        let trimmed = line.trim();
+        trimmed.starts_with("export ") || trimmed.starts_with("module.exports")
+    });
+
+    let has_jsx = code.contains("</") || code.contains("/>");
+
+    !has_import && !has_export && !has_jsx
 }
 
 fn allow_with_reason(reason: &str) -> ! {
@@ -740,5 +943,28 @@ mod tests {
         patched.push_str(new_str);
         patched.push_str(&file_content[idx + old_str.len()..]);
         assert_ne!(patched, file_content, "real changes should not be no-ops");
+    }
+
+    #[test]
+    fn test_is_standalone_runnable() {
+        // Pure script
+        assert!(is_standalone_runnable("const x = 1 + 2;\nconsole.log(x);", "js"));
+        assert!(is_standalone_runnable("def add(a, b):\n    return a + b\nprint(add(1, 2))", "py"));
+
+        // File containing imports
+        assert!(!is_standalone_runnable("import React from 'react';\nconst x = 1;", "js"));
+        assert!(!is_standalone_runnable("const fs = require('fs');\nconst x = 1;", "js"));
+
+        // File containing export
+        assert!(!is_standalone_runnable("export default function Page() {}", "js"));
+        assert!(!is_standalone_runnable("module.exports = { x: 1 };", "js"));
+
+        // JSX/TSX is never runnable
+        assert!(!is_standalone_runnable("const Comp = () => <div>Hello</div>;", "tsx"));
+        assert!(!is_standalone_runnable("const Comp = () => <div />;", "jsx"));
+
+        // Rust with/without main
+        assert!(is_standalone_runnable("fn main() {\n    println!(\"hello\");\n}", "rs"));
+        assert!(!is_standalone_runnable("pub fn add(a: i32, b: i32) -> i32 { a + b }", "rs"));
     }
 }

@@ -126,7 +126,7 @@ fn run_against_runtime(runtime: &mut Runtime, req: &ExecuteRequest) -> (bool, Sa
     let combined_code = format!("{}\n{}", preamble, req.code);
 
     let eval_result = if req.is_typescript {
-        let module = Module::new("index.ts", &combined_code);
+        let module = Module::new("smoke_verify.ts", &combined_code);
         runtime.load_module(&module).map(|_| serde_json::Value::Null)
     } else {
         runtime.eval::<serde_json::Value>(&combined_code)
@@ -298,7 +298,7 @@ impl JsSandbox {
             let lang_str = if is_typescript { "typescript" } else { "javascript" };
 
             let eval_result = if is_typescript {
-                let module = Module::new("index.ts", &combined_code);
+                let module = Module::new("smoke_verify.ts", &combined_code);
                 runtime.load_module(&module).map(|_| serde_json::Value::Null)
             } else {
                 runtime.eval::<serde_json::Value>(&combined_code)

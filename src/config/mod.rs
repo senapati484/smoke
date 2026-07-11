@@ -28,6 +28,29 @@ pub struct Config {
     /// Tunable so projects can dial up or down how chatty SMOKE is.
     #[serde(default)]
     pub prompts: Prompts,
+    /// Hook operation mode (advisor/strict/silent).
+    #[serde(default)]
+    pub hook: HookConfig,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum HookMode {
+    Advisor,
+    Strict,
+    Silent,
+}
+
+impl Default for HookMode {
+    fn default() -> Self {
+        HookMode::Advisor
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct HookConfig {
+    #[serde(default)]
+    pub mode: HookMode,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -85,6 +108,7 @@ impl Default for Config {
             languages: Languages::default(),
             python: PythonConfig::default(),
             prompts: Prompts::default(),
+            hook: HookConfig::default(),
         }
     }
 }
@@ -177,6 +201,12 @@ struct PartialConfig {
     languages: Option<PartialLanguages>,
     python: Option<PartialPythonConfig>,
     prompts: Option<PartialPrompts>,
+    hook: Option<PartialHookConfig>,
+}
+
+#[derive(Deserialize)]
+struct PartialHookConfig {
+    mode: Option<HookMode>,
 }
 
 #[derive(Deserialize)]
@@ -246,6 +276,9 @@ fn merge(mut base: Config, overlay: Option<PartialConfig>) -> Config {
             if let Some(v) = prompts.writing_size_threshold { base.prompts.writing_size_threshold = v; }
             if let Some(v) = prompts.clean_file_line_threshold { base.prompts.clean_file_line_threshold = v; }
             if let Some(v) = prompts.clean_max_added_lines { base.prompts.clean_max_added_lines = v; }
+        }
+        if let Some(hook) = over.hook {
+            if let Some(v) = hook.mode { base.hook.mode = v; }
         }
     }
     base
@@ -328,6 +361,12 @@ writing_size_threshold = 100
 clean_file_line_threshold = 50
 clean_max_added_lines     = 30
 
+[hook]
+# Hook operation mode:
+#   "advisor" — never block writes; surface all warnings / errors as system messages (default)
+#   "strict"  — block writes on syntax/execution errors for standalone runnable files
+#   "silent"  — allow all writes silently, with no warnings or messages
+mode = "advisor"
 "#;
 
     std::fs::write(output_path, content)?;
@@ -362,5 +401,17 @@ mod tests {
         assert!(!bogus.exists(), "test assumes file is absent");
         let cfg = Config::load(Some(bogus));
         assert_eq!(cfg.limits.timeout_ms, 2000); // still default
+    }
+
+    #[test]
+    fn test_hook_mode_config() {
+        let cfg = Config::load(None);
+        assert_eq!(cfg.hook.mode, HookMode::Advisor);
+
+        let temp_dir = tempfile::TempDir::new().unwrap();
+        let config_path = temp_dir.path().join(".smoke.toml");
+        std::fs::write(&config_path, "[hook]\nmode = \"strict\"").unwrap();
+        let cfg2 = Config::load(Some(&config_path));
+        assert_eq!(cfg2.hook.mode, HookMode::Strict);
     }
 }
