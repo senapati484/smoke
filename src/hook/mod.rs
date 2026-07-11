@@ -139,9 +139,15 @@ pub async fn run() -> anyhow::Result<()> {
         }
     };
 
-    // 8. Load config
+    // 8. Load config — only pass the explicit project path when it actually
+    //    exists; passing a non-existent path produces a noisy "could not read"
+    //    warning that confuses users who haven't created a .smoke.toml yet.
     let project_config_path = Path::new(&input.cwd).join(".smoke.toml");
-    let cfg = Config::load(Some(&project_config_path));
+    let cfg = Config::load(if project_config_path.exists() {
+        Some(&project_config_path)
+    } else {
+        None
+    });
 
     // 9. Extract or reconstruct code content to execute
     let mut code_content = String::new();
