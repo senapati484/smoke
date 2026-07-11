@@ -420,23 +420,41 @@ Rust code is not executed during verification. Instead, it is verified for compi
 
 ## FAQ
 
-**Does it work with agents other than Claude Code?**
+<details>
+<summary><b>Does it work with agents other than Claude Code?</b></summary>
+
 The PreToolUse/PostToolUse hooks are Claude Code–specific. The `smoke server` MCP integration works with any MCP client — Claude Desktop, Windsurf, Cline, Roo Code, and others.
+</details>
 
-**What about `import` / `require` in JS/TS snippets?**
+<details>
+<summary><b>What about <code>import</code> / <code>require</code> in JS/TS snippets?</b></summary>
+
 The V8 sandbox has no filesystem or network access, so `require` or `import` that reaches for external modules will fail. SMOKE tests snippets in isolation — it's not a full Node.js environment.
+</details>
 
-**Can I disable it for a specific language?**
-Yes. Add `javascript = false`, `typescript = false`, or `python = false` to `.smoke.toml`.
+<details>
+<summary><b>Can I disable it for a specific language?</b></summary>
 
-**Will it block my agent when there are no tests yet?**
+Yes. Add `js_enabled = false`, `ts_enabled = false`, or `python_enabled = false` to `.smoke.toml`.
+</details>
+
+<details>
+<summary><b>Will it block my agent when there are no tests yet?</b></summary>
+
 No. `smoke post-hook` only runs tests that exist alongside the edited file. No test file → no check → `exit 0`.
+</details>
 
-**Why Rust?**
+<details>
+<summary><b>Why Rust?</b></summary>
+
 ~5 ms JS startup. Embedded V8. Kernel-level seccomp filtering. Tree-sitter parsing at compile time. Zero-copy config merging. Scripting the tool itself would have been a meta-problem.
+</details>
 
-**The installer says Python is not found — is that a problem?**
+<details>
+<summary><b>The installer says Python is not found — is that a problem?</b></summary>
+
 Only if you want Python sandboxing. JS/TS works without Python. Install Python 3 and re-run if needed.
+</details>
 
 ---
 
