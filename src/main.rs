@@ -9,6 +9,7 @@ mod mcp;
 mod parser;
 mod post_hook;
 mod sandbox;
+mod state;
 
 use config::Config;
 

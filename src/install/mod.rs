@@ -56,6 +56,7 @@ impl Tool {
         }
     }
 
+    #[allow(dead_code)]
     pub fn key(&self) -> &'static str {
         match self {
             Tool::ClaudeCode => "claude-code",

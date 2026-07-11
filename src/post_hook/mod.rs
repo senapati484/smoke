@@ -44,6 +44,16 @@ pub async fn run() -> anyhow::Result<()> {
         std::process::exit(0);
     }
 
+    // Load config and session state
+    let project_config_path = Path::new(".smoke.toml");
+    let cfg = Config::load(if project_config_path.exists() {
+        Some(project_config_path)
+    } else {
+        None
+    });
+
+    let mut state = crate::state::SessionState::load(&input.session_id);
+
     // 4. Extract file path
     let file_path = input.tool_input.get("file_path").and_then(|v| v.as_str());
     let file_path = match file_path {
@@ -105,10 +115,38 @@ pub async fn run() -> anyhow::Result<()> {
                     Err(_) => std::process::exit(0),
                 };
                 if status.success() {
+                    if cfg.loop_detection.enabled {
+                        state.record_success(file_path);
+                        let _ = state.save(&input.session_id);
+                    }
                     let check_msg = format!("\x1b[32m[SMOKE] Cargo tests passed for {} ✓\x1b[0m", stem);
                     crate::sandbox::print_to_terminal(&check_msg);
                     std::process::exit(0);
                 } else {
+                    let err_msg = format!("cargo test failed for {}", stem);
+                    let mut loop_msg = None;
+                    if cfg.loop_detection.enabled {
+                        let fp = crate::state::fingerprint(file_path, "test_failure", &err_msg);
+                        let count = state.record_failure(&fp, file_path, &err_msg, cfg.loop_detection.fingerprint_window_minutes);
+                        let escalation = crate::state::escalation_for(count, cfg.loop_detection.warn_threshold, cfg.loop_detection.escalate_threshold);
+                        let _ = state.save(&input.session_id);
+
+                        match escalation {
+                            crate::state::EscalationLevel::Normal => {}
+                            crate::state::EscalationLevel::Notice => {
+                                loop_msg = Some(format!("⚠️ SMOKE: this is attempt #{} with the same test failure signature on {}.", count, file_path));
+                            }
+                            crate::state::EscalationLevel::Escalate => {
+                                loop_msg = Some(format!(
+                                    "🛑 SMOKE: {} consecutive test failures with the same signature on {}.\n\nStop retrying variations of the same fix — it isn't addressing the root cause.\nBefore editing again, explain your test-fix hypothesis to the user or ask for guidance.",
+                                    count, file_path
+                                ));
+                            }
+                        }
+                    }
+                    if let Some(ref msg) = loop_msg {
+                        eprintln!("{}\n", msg);
+                    }
                     eprintln!("SMOKE tests failed: cargo test failed for {}", stem);
                     std::process::exit(2);
                 }
@@ -130,8 +168,6 @@ pub async fn run() -> anyhow::Result<()> {
         Err(_) => std::process::exit(0),
     };
 
-    // 7. Load config
-    let cfg = Config::load(None);
     // Timeout for PostToolUse tests is 30s (30000ms)
     let timeout_ms = 30000;
 
@@ -154,12 +190,40 @@ pub async fn run() -> anyhow::Result<()> {
 
     // 9. Evaluate test outcome
     if result.passed {
+        if cfg.loop_detection.enabled {
+            state.record_success(file_path);
+            let _ = state.save(&input.session_id);
+        }
         let test_name = test_path.file_name().and_then(|f| f.to_str()).unwrap_or(stem);
         let check_msg = format!("\x1b[32m[SMOKE] Tests passed: {} ({}ms) ✓\x1b[0m", test_name, result.execution_time_ms);
         crate::sandbox::print_to_terminal(&check_msg);
         std::process::exit(0);
     } else {
-        eprintln!("SMOKE tests failed:\n{}", result.stderr.trim());
+        let err_msg = result.stderr.trim();
+        let mut loop_msg = None;
+        if cfg.loop_detection.enabled {
+            let fp = crate::state::fingerprint(file_path, "test_failure", err_msg);
+            let count = state.record_failure(&fp, file_path, err_msg, cfg.loop_detection.fingerprint_window_minutes);
+            let escalation = crate::state::escalation_for(count, cfg.loop_detection.warn_threshold, cfg.loop_detection.escalate_threshold);
+            let _ = state.save(&input.session_id);
+
+            match escalation {
+                crate::state::EscalationLevel::Normal => {}
+                crate::state::EscalationLevel::Notice => {
+                    loop_msg = Some(format!("⚠️ SMOKE: this is attempt #{} with the same test failure signature on {}.", count, file_path));
+                }
+                crate::state::EscalationLevel::Escalate => {
+                    loop_msg = Some(format!(
+                        "🛑 SMOKE: {} consecutive test failures with the same signature on {}.\n\nStop retrying variations of the same fix — it isn't addressing the root cause.\nBefore editing again, explain your test-fix hypothesis to the user or ask for guidance.",
+                        count, file_path
+                    ));
+                }
+            }
+        }
+        if let Some(ref msg) = loop_msg {
+            eprintln!("{}\n", msg);
+        }
+        eprintln!("SMOKE tests failed:\n{}", err_msg);
         std::process::exit(2);
     }
 }

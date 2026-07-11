@@ -163,6 +163,11 @@ pub async fn run() -> anyhow::Result<()> {
         std::process::exit(0);
     }
 
+    let mut state = crate::state::SessionState::load(&input.session_id);
+    if cfg.loop_detection.enabled {
+        let _ = crate::state::gc_state_dir(cfg.loop_detection.state_retention_hours * 3600);
+    }
+
     // 9. Extract or reconstruct code content to execute
     let mut code_content = String::new();
     let mut is_snippet = false;
@@ -192,10 +197,37 @@ pub async fn run() -> anyhow::Result<()> {
             code_content = input.tool_input.get("content").and_then(|v| v.as_str()).unwrap_or("").to_string();
             // Fast syntax check on Write content
             if let Some(err_msg) = crate::parser::check_syntax(&code_content, lang_id) {
+                let mut loop_msg = None;
+                if cfg.loop_detection.enabled {
+                    let fp = crate::state::fingerprint(file_path, "syntax_error", &err_msg);
+                    let count = state.record_failure(&fp, file_path, &err_msg, cfg.loop_detection.fingerprint_window_minutes);
+                    let escalation = crate::state::escalation_for(count, cfg.loop_detection.warn_threshold, cfg.loop_detection.escalate_threshold);
+                    let _ = state.save(&input.session_id); // Save mutated state
+
+                    match escalation {
+                        crate::state::EscalationLevel::Normal => {}
+                        crate::state::EscalationLevel::Notice => {
+                            loop_msg = Some(format!("⚠️ SMOKE: this is attempt #{} with the same error signature on {}.", count, file_path));
+                        }
+                        crate::state::EscalationLevel::Escalate => {
+                            loop_msg = Some(format!(
+                                "🛑 SMOKE: {} consecutive failures with the same error signature on {}.\n\nStop retrying variations of the same fix — it isn't addressing the root cause.\nBefore the next edit:\n  1. Re-read the actual error text below, in full.\n  2. State your hypothesis for the root cause in one sentence.\n  3. If you're not confident in the hypothesis, ask the user for guidance instead of editing again.\n\nLast error:\n{}",
+                                count, file_path, err_msg
+                            ));
+                        }
+                    }
+                }
+
                 if cfg.hook.mode == crate::config::HookMode::Strict {
+                    if let Some(ref msg) = loop_msg {
+                        eprintln!("{}\n", msg);
+                    }
                     eprintln!("SMOKE: {}", err_msg);
                     std::process::exit(2);
                 } else {
+                    if let Some(ref msg) = loop_msg {
+                        additional_context_lines.push(msg.clone());
+                    }
                     additional_context_lines.push(format!(
                         "⚠️ SMOKE syntax warning in {}: {}\nFix this before finalizing.",
                         file_path, err_msg
@@ -251,10 +283,37 @@ pub async fn run() -> anyhow::Result<()> {
 
             // Fast syntax check on the patched result first
             if let Some(err_msg) = crate::parser::check_syntax(&patched_content, lang_id) {
+                let mut loop_msg = None;
+                if cfg.loop_detection.enabled {
+                    let fp = crate::state::fingerprint(file_path, "syntax_error", &err_msg);
+                    let count = state.record_failure(&fp, file_path, &err_msg, cfg.loop_detection.fingerprint_window_minutes);
+                    let escalation = crate::state::escalation_for(count, cfg.loop_detection.warn_threshold, cfg.loop_detection.escalate_threshold);
+                    let _ = state.save(&input.session_id); // Save mutated state
+
+                    match escalation {
+                        crate::state::EscalationLevel::Normal => {}
+                        crate::state::EscalationLevel::Notice => {
+                            loop_msg = Some(format!("⚠️ SMOKE: this is attempt #{} with the same error signature on {}.", count, file_path));
+                        }
+                        crate::state::EscalationLevel::Escalate => {
+                            loop_msg = Some(format!(
+                                "🛑 SMOKE: {} consecutive failures with the same error signature on {}.\n\nStop retrying variations of the same fix — it isn't addressing the root cause.\nBefore the next edit:\n  1. Re-read the actual error text below, in full.\n  2. State your hypothesis for the root cause in one sentence.\n  3. If you're not confident in the hypothesis, ask the user for guidance instead of editing again.\n\nLast error:\n{}",
+                                count, file_path, err_msg
+                            ));
+                        }
+                    }
+                }
+
                 if cfg.hook.mode == crate::config::HookMode::Strict {
+                    if let Some(ref msg) = loop_msg {
+                        eprintln!("{}\n", msg);
+                    }
                     eprintln!("SMOKE: {}", err_msg);
                     std::process::exit(2);
                 } else {
+                    if let Some(ref msg) = loop_msg {
+                        additional_context_lines.push(msg.clone());
+                    }
                     additional_context_lines.push(format!(
                         "⚠️ SMOKE syntax warning in {}: {}\nFix this before finalizing.",
                         file_path, err_msg
@@ -317,6 +376,11 @@ pub async fn run() -> anyhow::Result<()> {
     }
 
     if is_jsx_file {
+        if cfg.loop_detection.enabled {
+            state.record_success(file_path);
+            let _ = state.save(&input.session_id);
+        }
+
         // Skip sandbox execution entirely for JSX/TSX.
         // Just print verified success if syntax check passed.
         let file_name = Path::new(file_path).file_name().and_then(|f| f.to_str()).unwrap_or(file_path);
@@ -430,6 +494,10 @@ pub async fn run() -> anyhow::Result<()> {
 
     // 11. Evaluate sandbox result
     if result.passed {
+        if cfg.loop_detection.enabled {
+            state.record_success(file_path);
+            let _ = state.save(&input.session_id);
+        }
         // ── Compute "added lines" up front (E2) ─────────────────────────
         // For Edit, the "added" count comes from diff_stats(edit_before, edit_after).
         // For Write, every line of the new file is "added" (no prior file).
@@ -548,6 +616,30 @@ pub async fn run() -> anyhow::Result<()> {
         println!("{}", serde_json::to_string(&output)?);
         std::process::exit(0);
     } else {
+        let err_msg = result.stderr.trim();
+        let cleaned_stderr = err_msg.replace("smoke_verify.ts", file_path);
+        let mut loop_msg = None;
+
+        if cfg.loop_detection.enabled {
+            let fp = crate::state::fingerprint(file_path, "runtime_error", err_msg);
+            let count = state.record_failure(&fp, file_path, err_msg, cfg.loop_detection.fingerprint_window_minutes);
+            let escalation = crate::state::escalation_for(count, cfg.loop_detection.warn_threshold, cfg.loop_detection.escalate_threshold);
+            let _ = state.save(&input.session_id); // Save mutated state
+
+            match escalation {
+                crate::state::EscalationLevel::Normal => {}
+                crate::state::EscalationLevel::Notice => {
+                    loop_msg = Some(format!("⚠️ SMOKE: this is attempt #{} with the same error signature on {}.", count, file_path));
+                }
+                crate::state::EscalationLevel::Escalate => {
+                    loop_msg = Some(format!(
+                        "🛑 SMOKE: {} consecutive failures with the same error signature on {}.\n\nStop retrying variations of the same fix — it isn't addressing the root cause.\nBefore the next edit:\n  1. Re-read the actual error text below, in full.\n  2. State your hypothesis for the root cause in one sentence.\n  3. If you're not confident in the hypothesis, ask the user for guidance instead of editing again.\n\nLast error:\n{}",
+                        count, file_path, cleaned_stderr
+                    ));
+                }
+            }
+        }
+
         let should_block = match cfg.hook.mode {
             crate::config::HookMode::Silent => false,
             crate::config::HookMode::Advisor => false,
@@ -557,11 +649,18 @@ pub async fn run() -> anyhow::Result<()> {
         };
 
         if should_block {
+            if let Some(ref msg) = loop_msg {
+                eprintln!("{}\n", msg);
+            }
             // Exit code 2 blocks the tool call in Claude Code, showing stderr to the agent
-            eprintln!("SMOKE: {}", result.stderr.trim());
+            eprintln!("SMOKE: {}", cleaned_stderr);
             std::process::exit(2);
         } else {
-            let cleaned_stderr = result.stderr.trim().replace("smoke_verify.ts", file_path);
+            if let Some(ref msg) = loop_msg {
+                crate::sandbox::print_to_terminal(&format!("\x1b[33m[SMOKE] {}\x1b[0m", msg));
+                additional_context_lines.push(msg.clone());
+            }
+
             let warn_msg = format!(
                 "⚠️ SMOKE execution warning in {}:\n{}",
                 file_path, cleaned_stderr

@@ -31,6 +31,9 @@ pub struct Config {
     /// Hook operation mode (advisor/strict/silent).
     #[serde(default)]
     pub hook: HookConfig,
+    /// Loop and repeated-failure detection settings.
+    #[serde(default)]
+    pub loop_detection: LoopDetectionConfig,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -51,6 +54,27 @@ impl Default for HookMode {
 pub struct HookConfig {
     #[serde(default)]
     pub mode: HookMode,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LoopDetectionConfig {
+    pub enabled: bool,
+    pub warn_threshold: u32,
+    pub escalate_threshold: u32,
+    pub fingerprint_window_minutes: u64,
+    pub state_retention_hours: u64,
+}
+
+impl Default for LoopDetectionConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            warn_threshold: 2,
+            escalate_threshold: 3,
+            fingerprint_window_minutes: 30,
+            state_retention_hours: 24,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -109,6 +133,7 @@ impl Default for Config {
             python: PythonConfig::default(),
             prompts: Prompts::default(),
             hook: HookConfig::default(),
+            loop_detection: LoopDetectionConfig::default(),
         }
     }
 }
@@ -202,11 +227,21 @@ struct PartialConfig {
     python: Option<PartialPythonConfig>,
     prompts: Option<PartialPrompts>,
     hook: Option<PartialHookConfig>,
+    loop_detection: Option<PartialLoopDetectionConfig>,
 }
 
 #[derive(Deserialize)]
 struct PartialHookConfig {
     mode: Option<HookMode>,
+}
+
+#[derive(Deserialize)]
+struct PartialLoopDetectionConfig {
+    enabled: Option<bool>,
+    warn_threshold: Option<u32>,
+    escalate_threshold: Option<u32>,
+    fingerprint_window_minutes: Option<u64>,
+    state_retention_hours: Option<u64>,
 }
 
 #[derive(Deserialize)]
@@ -279,6 +314,13 @@ fn merge(mut base: Config, overlay: Option<PartialConfig>) -> Config {
         }
         if let Some(hook) = over.hook {
             if let Some(v) = hook.mode { base.hook.mode = v; }
+        }
+        if let Some(loop_det) = over.loop_detection {
+            if let Some(v) = loop_det.enabled { base.loop_detection.enabled = v; }
+            if let Some(v) = loop_det.warn_threshold { base.loop_detection.warn_threshold = v; }
+            if let Some(v) = loop_det.escalate_threshold { base.loop_detection.escalate_threshold = v; }
+            if let Some(v) = loop_det.fingerprint_window_minutes { base.loop_detection.fingerprint_window_minutes = v; }
+            if let Some(v) = loop_det.state_retention_hours { base.loop_detection.state_retention_hours = v; }
         }
     }
     base
@@ -367,6 +409,19 @@ clean_max_added_lines     = 30
 #   "strict"  — block writes on syntax/execution errors for standalone runnable files
 #   "silent"  — allow all writes silently, with no warnings or messages
 mode = "advisor"
+
+[loop_detection]
+# Loop / repeated-failure detection settings:
+#   enabled — flag to enable/disable repeated failure monitoring (default true)
+#   warn_threshold — attempt count showing a warning alert (default 2)
+#   escalate_threshold — attempt count triggering forced strategy prompt (default 3)
+#   fingerprint_window_minutes — failure sequence memory window in minutes (default 30)
+#   state_retention_hours — time to retain session cache files (default 24)
+enabled = true
+warn_threshold = 2
+escalate_threshold = 3
+fingerprint_window_minutes = 30
+state_retention_hours = 24
 "#;
 
     std::fs::write(output_path, content)?;

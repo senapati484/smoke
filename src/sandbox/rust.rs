@@ -412,6 +412,7 @@ fn persist_cache(cache: &CacheFile) -> std::io::Result<()> {
     std::fs::write(path, json)
 }
 
+#[cfg_attr(test, allow(dead_code))]
 fn load_cache() {
     let path = cache_path();
     let Ok(content) = std::fs::read_to_string(&path) else { return };
