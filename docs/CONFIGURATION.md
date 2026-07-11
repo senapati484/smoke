@@ -32,7 +32,7 @@ SMOKE merges configuration from up to four layers. Each subsequent layer overrid
 
 | Section | Field | Type | Default | Description |
 |---------|-------|------|---------|-------------|
-| `[limits]` | `timeout_ms` | `u64` | `1000` | Hard timeout for sandbox execution in milliseconds |
+| `[limits]` | `timeout_ms` | `u64` | `2000` | Hard timeout for sandbox execution in milliseconds |
 | `[limits]` | `max_file_lines` | `usize` | `200` | Files with more lines than this use snippet-only execution (Edit tool) |
 | `[limits]` | `memory_limit_mb` | `u64` | `256` | Memory limit for Python child process in MB |
 | `[limits]` | `max_file_lines_absolute` | `usize` | `1000` | Files larger than this (lines) are skipped entirely |
@@ -40,12 +40,18 @@ SMOKE merges configuration from up to four layers. Each subsequent layer overrid
 | `[languages]` | `ts_enabled` | `bool` | `true` | Enable/disable TypeScript sandbox |
 | `[languages]` | `python_enabled` | `bool` | `true` | Enable/disable Python sandbox |
 | `[python]` | `interpreter` | `string` | `"python3"` | Python interpreter path (`"python3"`, `"python"`, or absolute path) |
+| `[hook]` | `mode` | `string` | `"advisor"` | Hook operation mode: `"advisor"`, `"strict"`, or `"silent"` |
+| `[loop_detection]` | `enabled` | `bool` | `true` | Enable loop / repeated-failure detection |
+| `[loop_detection]` | `warn_threshold` | `u32` | `2` | Failures of same signature to trigger a warning note |
+| `[loop_detection]` | `escalate_threshold` | `u32` | `3` | Failures of same signature to trigger forced strategy-change prompt |
+| `[loop_detection]` | `fingerprint_window_minutes` | `u64` | `30` | Failure memory window in minutes |
+| `[loop_detection]` | `state_retention_hours` | `u64` | `24` | Hours to retain session files before cleaning them up (GC) |
 
 ### Default TOML (as emitted by `smoke config init`)
 
 ```toml
 [limits]
-timeout_ms = 1000
+timeout_ms = 2000
 max_file_lines = 200
 memory_limit_mb = 256
 max_file_lines_absolute = 1000
@@ -57,6 +63,16 @@ python_enabled = true
 
 [python]
 interpreter = "python3"
+
+[hook]
+mode = "advisor"
+
+[loop_detection]
+enabled = true
+warn_threshold = 2
+escalate_threshold = 3
+fingerprint_window_minutes = 30
+state_retention_hours = 24
 ```
 
 ---
@@ -122,6 +138,36 @@ pub struct PythonConfig {
 
 Used at `src/hook/mod.rs:216`: `sandbox.execute(&code_content, &cfg.python.interpreter, cfg.limits.timeout_ms).await`
 
+### `HookConfig`
+
+```rust
+pub struct HookConfig {
+    /// Operation mode: Advisor, Strict, or Silent
+    pub mode: HookMode,          // default: HookMode::Advisor
+}
+```
+
+- **Advisor mode**: Warns on syntax and execution errors by inserting helpful notes into Claude Code's `additionalContext`. Never blocks the write process.
+- **Strict mode**: Blocks edits with a terminal error and exit code `2` only when syntax/execution errors are found in a standalone runnable file. Allows otherwise.
+- **Silent mode**: Disables all syntax and sandbox verification checks silently.
+
+### `LoopDetectionConfig`
+
+```rust
+pub struct LoopDetectionConfig {
+    /// Toggle loop detection
+    pub enabled: bool,                     // default: true
+    /// Number of failures to trigger warning
+    pub warn_threshold: u32,               // default: 2
+    /// Number of failures to trigger forced strategy prompt
+    pub escalate_threshold: u32,           // default: 3
+    /// Time window to track repeating failures (minutes)
+    pub fingerprint_window_minutes: u64,   // default: 30
+    /// Time to retain session state caches (hours)
+    pub state_retention_hours: u64,        // default: 24
+}
+```
+
 ---
 
 ## 4. How Config Is Loaded
@@ -135,6 +181,9 @@ struct PartialConfig {
     limits: Option<PartialLimits>,
     languages: Option<PartialLanguages>,
     python: Option<PartialPythonConfig>,
+    prompts: Option<PartialPrompts>,
+    hook: Option<PartialHookConfig>,
+    loop_detection: Option<PartialLoopDetectionConfig>,
 }
 ```
 

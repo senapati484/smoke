@@ -303,7 +303,7 @@ This creates `.smoke.toml` in the current directory with contents like:
 
 [limits]
 # Hard timeout for sandbox execution (milliseconds)
-timeout_ms = 1000
+timeout_ms = 2000
 
 # Files with more lines than this use snippet-only execution
 max_file_lines = 200
@@ -321,6 +321,16 @@ python_enabled = true
 
 [python]
 interpreter = "python3"
+
+[hook]
+mode = "advisor"
+
+[loop_detection]
+enabled = true
+warn_threshold = 2
+escalate_threshold = 3
+fingerprint_window_minutes = 30
+state_retention_hours = 24
 ```
 
 Edit this file to adjust timeouts, disable languages, or point to a different

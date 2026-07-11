@@ -1,0 +1,20 @@
+# SMOKE — Write. Run. Know.
+> Syntax-checks and sandbox-executes JS, TS, and Python code before writes are allowed, catching bugs immediately.
+
+## Core Files
+- [src/main.rs](file:///Users/sayansenapati/Desktop/Dev/Innovation/smoke/src/main.rs): CLI Entrypoint and CLI subcommand routing.
+- [src/hook/mod.rs](file:///Users/sayansenapati/Desktop/Dev/Innovation/smoke/src/hook/mod.rs): PreToolUse hook intercepting Claude Code write/edit tool calls.
+- [src/post_hook/mod.rs](file:///Users/sayansenapati/Desktop/Dev/Innovation/smoke/src/post_hook/mod.rs): PostToolUse hook finding and executing co-located tests after successful writes.
+- [src/mcp/mod.rs](file:///Users/sayansenapati/Desktop/Dev/Innovation/smoke/src/mcp/mod.rs): stdio Model Context Protocol (MCP) server handler exposing the `smoke_verify` tool.
+- [src/sandbox/](file:///Users/sayansenapati/Desktop/Dev/Innovation/smoke/src/sandbox): Core sandboxes (V8/deno_core for JS/TS, subprocess + rlimit + seccomp for Python).
+- [src/parser/mod.rs](file:///Users/sayansenapati/Desktop/Dev/Innovation/smoke/src/parser/mod.rs): Tree-sitter parsing, standalone file analysis, and writing-side duplicate checks.
+- [src/state/mod.rs](file:///Users/sayansenapati/Desktop/Dev/Innovation/smoke/src/state/mod.rs): Session-scoped, file-backed loop and repeated-failure detection state.
+- [src/config/mod.rs](file:///Users/sayansenapati/Desktop/Dev/Innovation/smoke/src/config/mod.rs): Layered configuration loading and merging.
+- [src/install/mod.rs](file:///Users/sayansenapati/Desktop/Dev/Innovation/smoke/src/install/mod.rs): Indempotent auto-installer for tool settings.
+
+## Key Concepts
+- **Advisor Mode**: Default mode. Prints warnings to the terminal and returns them in Claude Code's `additionalContext` without blocking.
+- **Strict Mode**: Blocks writes (exits with code 2) on syntax or sandbox execution errors only when the file is identified as a standalone runnable program.
+- **Silent Mode**: Allows all writes silently without running any checks.
+- **Loop / Repeated-Failure Detection**: Scoped per Claude Code `session_id`, normalized failure signatures are stored in `~/.smoke/state/<session_id>.json` to warn or escalate when loops are detected.
+- **Fail-Open Policy**: Any internal error (disk I/O, parsing, disabled engines) defaults to allowing the write with zero blocking.

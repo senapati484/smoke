@@ -273,9 +273,30 @@ Three integration modes — one sandbox core:
 
 | Mode | Command | Primary use case |
 |------|---------|-----------------|
-| **Hook** | `smoke hook` | PreToolUse — blocks bad code before it reaches disk |
-| **Post-hook** | `smoke post-hook` | PostToolUse — runs co-located tests after a write |
+| **Hook** | `smoke hook` | PreToolUse — blocks or warns about bad code before it reaches disk |
+| **Post-hook** | `smoke post-hook` | PostToolUse — runs co-located tests after a successful write |
 | **MCP server** | `smoke server` | `smoke_verify` tool from any MCP client |
+
+---
+
+## Hook Modes & Loop Detection
+
+### Hook Modes
+When integrated with Claude Code via hooks, SMOKE operates in one of three modes, defined via `mode` in the `[hook]` section of your configuration:
+
+1. **`"advisor"` (Default)**: SMOKE never blocks writes (`exit 0`). Syntax/runtime errors are printed to the terminal in yellow and returned to Claude's context via `additionalContext` so the agent is aware and can self-correct.
+2. **`"strict"`**: SMOKE blocks tool execution with exit code `2` only when syntax or sandbox run errors are found in a *standalone runnable script* (contains `fn main` in Rust, or does not contain `import`/`export`/`require` module syntax in JS/TS). For non-runnable module files (like React components), it falls back to warnings.
+3. **`"silent"`**: Verification is skipped entirely and all tool calls are silently allowed.
+
+### Loop & Repeated-Failure Detection
+AI agents often get stuck in repetitive edit-retry loops (retrying variants of the same broken fix). SMOKE solves this using a file-backed, session-scoped memory:
+
+- On a hook failure (syntax or execution error), SMOKE normalizes the error output (stripping line/column numbers, whitespaces, and quotes) to compute a stable **error fingerprint**.
+- It records the error fingerprint scoped to the Claude Code `session_id` in `~/.smoke/state/<session_id>.json`.
+- If the agent repeats the same error signature on a file:
+  - **Attempt 2**: A warning notice is prepended reminding the agent of consecutive identical failures.
+  - **Attempt 3+**: An escalation is triggered injecting a forced strategy-change prompt. The prompt forces the agent to stop editing, re-read the error in full, state its hypothesis, or ask the user for guidance.
+- Once the sandbox checks pass successfully, the failure records for the target file are automatically cleared.
 
 ---
 
@@ -331,16 +352,28 @@ Generate a project config with `smoke config init`:
 
 ```toml
 [limits]
-timeout_ms = 5000   # Sandbox execution timeout
-memory_mb  = 128    # Memory cap for Python subprocess
+timeout_ms = 2000              # Sandbox execution timeout (ms)
+max_file_lines = 200           # Files larger than this use snippet-only mode (Edit tool)
+memory_limit_mb = 256          # Memory limit for Python subprocesses
+max_file_lines_absolute = 1000 # Files larger than this are skipped (always allowed)
 
 [languages]
-javascript = true
-typescript = true
-python     = true
+js_enabled = true
+ts_enabled = true
+python_enabled = true
 
 [python]
-interpreter = "python3"   # Interpreter binary name or full path
+interpreter = "python3"        # Python interpreter binary or absolute path
+
+[hook]
+mode = "advisor"               # "advisor" (warn only), "strict" (block runnable files), "silent" (skip)
+
+[loop_detection]
+enabled = true                 # Monitor and prevent repeating agent fail loops
+warn_threshold = 2             # Failures of same signature to trigger a warning note
+escalate_threshold = 3         # Failures of same signature to trigger forced strategy-change prompt
+fingerprint_window_minutes = 30# Time window to track repeating failures (minutes)
+state_retention_hours = 24     # Hours to retain session files before cleanup (GC)
 ```
 
 Every field is optional — only set what you need to change from the defaults.

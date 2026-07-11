@@ -32,6 +32,7 @@ main.rs
   ├── post_hook    (PostToolUse handler)
   ├── mcp          (MCP server via rmcp)
   ├── parser       (tree-sitter syntax checking, snippet extraction)
+  ├── state        (session-scoped loop and failure detection memory)
   └── sandbox
        ├── mod.rs  (shared SandboxResult type)
        ├── js.rs   (rustyscript/V8 runtime)
@@ -41,10 +42,11 @@ main.rs
 Dependencies between modules are minimal:
 
 ```
-hook ──> sandbox::js, sandbox::python, config, parser
-post_hook ──> sandbox::js, sandbox::python, config
+hook ──> sandbox::js, sandbox::python, config, parser, state
+post_hook ──> sandbox::js, sandbox::python, config, state
 mcp ──> sandbox::js, sandbox::python, config
 parser ──> tree-sitter (standalone, no SMOKE-internal deps)
+state ──> serde, dirs, anyhow (standalone)
 config ──> toml, serde (standalone)
 sandbox::js ──> rustyscript (standalone)
 sandbox::python ──> tempfile, tokio::process (standalone)
@@ -488,7 +490,30 @@ Registered in the project as a stdio MCP server:
     }
   }
 }
+## Stateful Loop & Failure Detection
+
+SMOKE tracks consecutive failure attempts on a file within the same Claude Code session to notice agentic edit-retry loops.
+
+### Hashing and Normalization
+To prevent slight changes in whitespace, line numbers, or variable naming from avoiding detection, the `state` module normalizes error messages before computing a fingerprint:
+1. **Remove line/column numbers**: Replaces occurrences matching `:line \d+`, `:\d+:\d+`, or `:\d+` with empty text.
+2. **Remove quoted strings**: Replaces text inside single/double quotes with standard placeholders `'...'` or `"..."`.
+3. **Normalize whitespaces**: Trims outer whitespace and collapses inner contiguous whitespace.
+4. **Truncate & Hash**: Truncates to 200 characters and computes a 16-character FNV-1a hex string hash.
+
+The combined fingerprint is computed as:
+```text
+FNV-1a( file_path + "::" + error_category + "::" + normalized_error )
 ```
+
+### State Storage
+State is persisted scoped to the Claude Code `session_id` at:
+```text
+~/.smoke/state/<session_id>.json
+```
+State files contain a map of active fingerprints with metadata (consecutive error count, timestamps) and are saved atomically using temporary files. Stale session states are automatically garbage-collected (defaults to purging files older than 24 hours).
+
+---
 
 ## Error Handling Philosophy
 
