@@ -28,7 +28,7 @@ pub struct Config {
     /// Tunable so projects can dial up or down how chatty SMOKE is.
     #[serde(default)]
     pub prompts: Prompts,
-    /// Hook operation mode (advisor/strict/silent).
+    /// Hook operation mode (guided/advisor/silent).
     #[serde(default)]
     pub hook: HookConfig,
     /// Loop and repeated-failure detection settings.
@@ -39,14 +39,17 @@ pub struct Config {
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum HookMode {
+    /// Block on errors, return a clear "fix and retry" instruction to the AI (default)
+    Guided,
+    /// Never block; inject warnings into AI context as soft messages
     Advisor,
-    Strict,
+    /// Pass everything through silently, no verification
     Silent,
 }
 
 impl Default for HookMode {
     fn default() -> Self {
-        HookMode::Advisor
+        HookMode::Guided
     }
 }
 
@@ -405,10 +408,10 @@ clean_max_added_lines     = 30
 
 [hook]
 # Hook operation mode:
-#   "advisor" — never block writes; surface all warnings / errors as system messages (default)
-#   "strict"  — block writes on syntax/execution errors for standalone runnable files
-#   "silent"  — allow all writes silently, with no warnings or messages
-mode = "advisor"
+#   "guided"  — block writes on errors and return a clear "fix and retry" instruction to the AI (default)
+#   "advisor" — never block writes; surface warnings as AI context messages only
+#   "silent"  — allow all writes silently, no verification
+mode = "guided"
 
 [loop_detection]
 # Loop / repeated-failure detection settings:
@@ -461,12 +464,12 @@ mod tests {
     #[test]
     fn test_hook_mode_config() {
         let cfg = Config::load(None);
-        assert_eq!(cfg.hook.mode, HookMode::Advisor);
+        assert_eq!(cfg.hook.mode, HookMode::Guided);
 
         let temp_dir = tempfile::TempDir::new().unwrap();
         let config_path = temp_dir.path().join(".smoke.toml");
-        std::fs::write(&config_path, "[hook]\nmode = \"strict\"").unwrap();
+        std::fs::write(&config_path, "[hook]\nmode = \"advisor\"").unwrap();
         let cfg2 = Config::load(Some(&config_path));
-        assert_eq!(cfg2.hook.mode, HookMode::Strict);
+        assert_eq!(cfg2.hook.mode, HookMode::Advisor);
     }
 }

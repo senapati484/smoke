@@ -27,25 +27,14 @@ struct HookInput {
 
 #[derive(Debug, Serialize, Default)]
 struct HookOutput {
-    #[serde(rename = "hookSpecificOutput")]
-    hook_specific_output: HookSpecificOutput,
-}
-
-#[derive(Debug, Serialize, Default)]
-struct HookSpecificOutput {
-    #[serde(rename = "hookEventName")]
-    hook_event_name: String,
-    #[serde(rename = "permissionDecision")]
-    permission_decision: String,
-    #[serde(rename = "permissionDecisionReason")]
-    permission_decision_reason: String,
-    /// Injected into Claude's context as a system reminder. Use for soft prompts
-    /// ("FYI, this edit removed 70 lines...") that the agent should see without
-    /// the tool call being blocked. See Claude Code hooks docs.
+    /// "approve" or "block"
+    decision: String,
+    /// Shown to the AI when blocking (the fix instruction)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    reason: Option<String>,
+    /// Injected into AI's context as a system message on approve
     #[serde(rename = "additionalContext", skip_serializing_if = "Option::is_none")]
     additional_context: Option<String>,
-    #[serde(rename = "updatedInput", skip_serializing_if = "Option::is_none")]
-    updated_input: Option<serde_json::Value>,
 }
 
 enum Language {
@@ -126,13 +115,9 @@ pub async fn run() -> anyhow::Result<()> {
         Some(l) => l,
         None => {
             let output = HookOutput {
-                hook_specific_output: HookSpecificOutput {
-                    hook_event_name: "PreToolUse".to_string(),
-                    permission_decision: "allow".to_string(),
-                    permission_decision_reason: format!("SMOKE: no sandbox for .{} — skipped", ext),
-                    additional_context: None,
-                    updated_input: None,
-                },
+                decision: "approve".to_string(),
+                reason: None,
+                additional_context: Some(format!("SMOKE: no sandbox for .{} — skipped", ext)),
             };
             println!("{}", serde_json::to_string(&output)?);
             std::process::exit(0);
@@ -150,17 +135,7 @@ pub async fn run() -> anyhow::Result<()> {
     });
 
     if cfg.hook.mode == crate::config::HookMode::Silent {
-        let output = HookOutput {
-            hook_specific_output: HookSpecificOutput {
-                hook_event_name: "PreToolUse".to_string(),
-                permission_decision: "allow".to_string(),
-                permission_decision_reason: "SMOKE: silent mode".to_string(),
-                additional_context: None,
-                updated_input: None,
-            },
-        };
-        println!("{}", serde_json::to_string(&output)?);
-        std::process::exit(0);
+        approve_silent();
     }
 
     let mut state = crate::state::SessionState::load(&input.session_id);
@@ -202,37 +177,55 @@ pub async fn run() -> anyhow::Result<()> {
                     let fp = crate::state::fingerprint(file_path, "syntax_error", &err_msg);
                     let count = state.record_failure(&fp, file_path, &err_msg, cfg.loop_detection.fingerprint_window_minutes);
                     let escalation = crate::state::escalation_for(count, cfg.loop_detection.warn_threshold, cfg.loop_detection.escalate_threshold);
-                    let _ = state.save(&input.session_id); // Save mutated state
+                    let _ = state.save(&input.session_id);
 
                     match escalation {
                         crate::state::EscalationLevel::Normal => {}
                         crate::state::EscalationLevel::Notice => {
-                            loop_msg = Some(format!("⚠️ SMOKE: this is attempt #{} with the same error signature on {}.", count, file_path));
+                            loop_msg = Some(format!("⚠️ This is attempt #{} with the same error on {}. Please re-read the error carefully before retrying.", count, file_path));
                         }
                         crate::state::EscalationLevel::Escalate => {
                             loop_msg = Some(format!(
-                                "🛑 SMOKE: {} consecutive failures with the same error signature on {}.\n\nStop retrying variations of the same fix — it isn't addressing the root cause.\nBefore the next edit:\n  1. Re-read the actual error text below, in full.\n  2. State your hypothesis for the root cause in one sentence.\n  3. If you're not confident in the hypothesis, ask the user for guidance instead of editing again.\n\nLast error:\n{}",
+                                "🛑 {} consecutive failures with the same error on {}.\n\nStop retrying variations of the same fix — it isn't addressing the root cause.\nBefore the next edit:\n  1. Re-read the actual error text below, in full.\n  2. State your hypothesis for the root cause in one sentence.\n  3. If you're not confident, ask the user for guidance instead of editing again.\n\nLast error:\n{}",
                                 count, file_path, err_msg
                             ));
                         }
                     }
                 }
 
-                if cfg.hook.mode == crate::config::HookMode::Strict {
-                    if let Some(ref msg) = loop_msg {
-                        eprintln!("{}\n", msg);
+                match cfg.hook.mode {
+                    crate::config::HookMode::Guided => {
+                        // Block and give the AI a clear fix instruction
+                        let mut reason = format!(
+                            "🔍 SMOKE detected a syntax error in {}:\n\n{}\n\nPlease fix this error and rewrite the file.",
+                            file_path, err_msg
+                        );
+                        if let Some(ref msg) = loop_msg {
+                            reason = format!("{}\n\n{}", msg, reason);
+                        }
+                        crate::sandbox::print_to_terminal(&format!("\x1b[31m[SMOKE] Blocked {} — syntax error: {}\x1b[0m", file_path, err_msg));
+                        let output = HookOutput {
+                            decision: "block".to_string(),
+                            reason: Some(reason),
+                            additional_context: None,
+                        };
+                        println!("{}", serde_json::to_string(&output)?);
+                        std::process::exit(0);
                     }
-                    eprintln!("SMOKE: {}", err_msg);
-                    std::process::exit(2);
-                } else {
-                    if let Some(ref msg) = loop_msg {
-                        additional_context_lines.push(msg.clone());
+                    crate::config::HookMode::Advisor => {
+                        // Allow but inject warning into AI context
+                        if let Some(ref msg) = loop_msg {
+                            additional_context_lines.push(msg.clone());
+                        }
+                        additional_context_lines.push(format!(
+                            "⚠️ SMOKE syntax warning in {}: {}\nThe file was written but this should be fixed.",
+                            file_path, err_msg
+                        ));
+                        syntax_error_occurred = true;
                     }
-                    additional_context_lines.push(format!(
-                        "⚠️ SMOKE syntax warning in {}: {}\nFix this before finalizing.",
-                        file_path, err_msg
-                    ));
-                    syntax_error_occurred = true;
+                    crate::config::HookMode::Silent => {
+                        // fall through, allow
+                    }
                 }
             }
         }
@@ -288,37 +281,51 @@ pub async fn run() -> anyhow::Result<()> {
                     let fp = crate::state::fingerprint(file_path, "syntax_error", &err_msg);
                     let count = state.record_failure(&fp, file_path, &err_msg, cfg.loop_detection.fingerprint_window_minutes);
                     let escalation = crate::state::escalation_for(count, cfg.loop_detection.warn_threshold, cfg.loop_detection.escalate_threshold);
-                    let _ = state.save(&input.session_id); // Save mutated state
+                    let _ = state.save(&input.session_id);
 
                     match escalation {
                         crate::state::EscalationLevel::Normal => {}
                         crate::state::EscalationLevel::Notice => {
-                            loop_msg = Some(format!("⚠️ SMOKE: this is attempt #{} with the same error signature on {}.", count, file_path));
+                            loop_msg = Some(format!("⚠️ This is attempt #{} with the same error on {}. Please re-read the error carefully before retrying.", count, file_path));
                         }
                         crate::state::EscalationLevel::Escalate => {
                             loop_msg = Some(format!(
-                                "🛑 SMOKE: {} consecutive failures with the same error signature on {}.\n\nStop retrying variations of the same fix — it isn't addressing the root cause.\nBefore the next edit:\n  1. Re-read the actual error text below, in full.\n  2. State your hypothesis for the root cause in one sentence.\n  3. If you're not confident in the hypothesis, ask the user for guidance instead of editing again.\n\nLast error:\n{}",
+                                "🛑 {} consecutive failures with the same error on {}.\n\nStop retrying variations of the same fix.\nBefore the next edit:\n  1. Re-read the actual error text below, in full.\n  2. State your hypothesis for the root cause in one sentence.\n  3. If you're not confident, ask the user for guidance instead of editing again.\n\nLast error:\n{}",
                                 count, file_path, err_msg
                             ));
                         }
                     }
                 }
 
-                if cfg.hook.mode == crate::config::HookMode::Strict {
-                    if let Some(ref msg) = loop_msg {
-                        eprintln!("{}\n", msg);
+                match cfg.hook.mode {
+                    crate::config::HookMode::Guided => {
+                        let mut reason = format!(
+                            "🔍 SMOKE detected a syntax error in {}:\n\n{}\n\nPlease fix this error and retry the edit.",
+                            file_path, err_msg
+                        );
+                        if let Some(ref msg) = loop_msg {
+                            reason = format!("{}\n\n{}", msg, reason);
+                        }
+                        crate::sandbox::print_to_terminal(&format!("\x1b[31m[SMOKE] Blocked {} — syntax error: {}\x1b[0m", file_path, err_msg));
+                        let output = HookOutput {
+                            decision: "block".to_string(),
+                            reason: Some(reason),
+                            additional_context: None,
+                        };
+                        println!("{}", serde_json::to_string(&output)?);
+                        std::process::exit(0);
                     }
-                    eprintln!("SMOKE: {}", err_msg);
-                    std::process::exit(2);
-                } else {
-                    if let Some(ref msg) = loop_msg {
-                        additional_context_lines.push(msg.clone());
+                    crate::config::HookMode::Advisor => {
+                        if let Some(ref msg) = loop_msg {
+                            additional_context_lines.push(msg.clone());
+                        }
+                        additional_context_lines.push(format!(
+                            "⚠️ SMOKE syntax warning in {}: {}\nThe edit was applied but this should be fixed.",
+                            file_path, err_msg
+                        ));
+                        syntax_error_occurred = true;
                     }
-                    additional_context_lines.push(format!(
-                        "⚠️ SMOKE syntax warning in {}: {}\nFix this before finalizing.",
-                        file_path, err_msg
-                    ));
-                    syntax_error_occurred = true;
+                    crate::config::HookMode::Silent => {}
                 }
             }
 
@@ -346,7 +353,7 @@ pub async fn run() -> anyhow::Result<()> {
         _ => {}
     }
 
-    // 9.5 Handle syntax errors or JSX/TSX bypass
+    // 9.5 Handle syntax errors (advisor mode only — guided already returned above)
     if syntax_error_occurred {
         let additional_context = if additional_context_lines.is_empty() {
             None
@@ -363,13 +370,9 @@ pub async fn run() -> anyhow::Result<()> {
             }
         }
         let output = HookOutput {
-            hook_specific_output: HookSpecificOutput {
-                hook_event_name: "PreToolUse".to_string(),
-                permission_decision: "allow".to_string(),
-                permission_decision_reason: "SMOKE: allowed with syntax warnings".to_string(),
-                additional_context,
-                updated_input: None,
-            },
+            decision: "approve".to_string(),
+            reason: None,
+            additional_context,
         };
         println!("{}", serde_json::to_string(&output)?);
         std::process::exit(0);
@@ -414,19 +417,15 @@ pub async fn run() -> anyhow::Result<()> {
 
         if is_clean {
             let clean_msg = format!(
-                "This change is clean: small file ({} lines), no stdlib duplicates, no large deletion. This is the kind of edit SMOKE rewards.",
-                resulting_lines
+                "✅ SMOKE: {} — small file ({} lines), clean, no issues detected.",
+                file_path, resulting_lines
             );
             crate::sandbox::print_to_terminal(&format!("\x1b[32m[SMOKE] {}\x1b[0m", clean_msg));
 
             let output = HookOutput {
-                hook_specific_output: HookSpecificOutput {
-                    hook_event_name: "PreToolUse".to_string(),
-                    permission_decision: "allow".to_string(),
-                    permission_decision_reason: "SMOKE: JSX/TSX syntax clean".to_string(),
-                    additional_context: Some(clean_msg),
-                    updated_input: None,
-                },
+                decision: "approve".to_string(),
+                reason: None,
+                additional_context: Some(clean_msg),
             };
             println!("{}", serde_json::to_string(&output)?);
             std::process::exit(0);
@@ -448,13 +447,9 @@ pub async fn run() -> anyhow::Result<()> {
         }
 
         let output = HookOutput {
-            hook_specific_output: HookSpecificOutput {
-                hook_event_name: "PreToolUse".to_string(),
-                permission_decision: "allow".to_string(),
-                permission_decision_reason: "SMOKE: JSX/TSX allowed".to_string(),
-                additional_context,
-                updated_input: None,
-            },
+            decision: "approve".to_string(),
+            reason: None,
+            additional_context,
         };
         println!("{}", serde_json::to_string(&output)?);
         std::process::exit(0);
@@ -498,13 +493,8 @@ pub async fn run() -> anyhow::Result<()> {
             state.record_success(file_path);
             let _ = state.save(&input.session_id);
         }
-        // ── Compute "added lines" up front (E2) ─────────────────────────
-        // For Edit, the "added" count comes from diff_stats(edit_before, edit_after).
-        // For Write, every line of the new file is "added" (no prior file).
         let added_lines = if let Some(ref before) = edit_before_content {
             let (_, removed) = diff_stats(before, &code_content);
-            // Approximate added by net line change; when most lines are net-new
-            // this is good enough for the size gate.
             let before_lines = before.lines().count();
             let after_lines = code_content.lines().count();
             after_lines.saturating_sub(before_lines.saturating_sub(removed))
@@ -512,20 +502,6 @@ pub async fn run() -> anyhow::Result<()> {
             code_content.lines().count()
         };
 
-        // ── Positive reinforcement (E2) ──────────────────────────────────
-        // Decide early whether this edit deserves a "clean" signal. We fire
-        // the reinforcement when ALL of the following hold:
-        //   - not a snippet-only check (full file ran)
-        //   - the resulting file is small (under cfg.prompts.clean_file_line_threshold)
-        //   - the change added few lines (under cfg.prompts.clean_max_added_lines)
-        //   - no soft prompts were generated (no anti-deletion, no stdlib
-        //     hint — both would have been added to additional_context_lines
-        //     by now, BUT we have to check this AFTER the writing-side
-        //     detector runs below, so we defer to a flag here)
-        //
-        // The `is_clean` flag starts true and gets set false by any soft
-        // prompt we generate. That way we don't have to duplicate the
-        // conditions for "is this soft prompt eligible".
         let resulting_lines = code_content.lines().count();
         let mut is_clean = !is_snippet
             && cfg.prompts.clean_file_line_threshold > 0
@@ -533,24 +509,17 @@ pub async fn run() -> anyhow::Result<()> {
             && cfg.prompts.clean_max_added_lines > 0
             && added_lines <= cfg.prompts.clean_max_added_lines;
 
-        let reason = if is_snippet {
-            "SMOKE: large file — snippet only".to_string()
+        let exec_label = if is_snippet {
+            format!("verified snippet in {}ms", result.execution_time_ms)
         } else {
-            format!("SMOKE: executed clean in {}ms", result.execution_time_ms)
+            format!("verified in {}ms", result.execution_time_ms)
         };
 
-        // Print direct-to-terminal verification success indicator
+        // Print direct-to-terminal success indicator
         let file_name = Path::new(file_path).file_name().and_then(|f| f.to_str()).unwrap_or(file_path);
-        let check_msg = if is_snippet {
-            format!("\x1b[32m[SMOKE] Verified {} successfully (snippet, {}ms) ✓\x1b[0m", file_name, result.execution_time_ms)
-        } else {
-            format!("\x1b[32m[SMOKE] Verified {} successfully ({}ms) ✓\x1b[0m", file_name, result.execution_time_ms)
-        };
-        crate::sandbox::print_to_terminal(&check_msg);
+        crate::sandbox::print_to_terminal(&format!("\x1b[32m[SMOKE] ✅ {} {} ✓\x1b[0m", file_name, exec_label));
 
-        // Writing-side stdlib hint: if this Edit or Write added a lot of new
-        // code AND the new code re-implements something a stdlib/library
-        // already provides, surface that as a soft prompt.
+        // Writing-side stdlib hint
         if let Some(writing_hint) = crate::parser::writing_hint_for(
             &code_content, lang_id, added_lines, cfg.prompts.writing_size_threshold,
         ) {
@@ -558,60 +527,25 @@ pub async fn run() -> anyhow::Result<()> {
             is_clean = false;
         }
 
-        // If the anti-deletion prompt was added earlier, the file is no longer
-        // in "clean" territory either.
         if additional_context_lines.iter().any(|l| l.contains("This Edit removed")) {
             is_clean = false;
         }
 
-        // Combine all soft prompts into one additionalContext string and print
-        // them all to the terminal. The write still goes through.
-        let additional_context = if additional_context_lines.is_empty() {
-            None
-        } else {
-            Some(additional_context_lines.join("\n\n"))
-        };
-        if let Some(ref ctx) = additional_context {
-            for line in ctx.lines() {
-                if line.is_empty() {
-                    crate::sandbox::print_to_terminal("");
-                } else {
-                    crate::sandbox::print_to_terminal(&format!("\x1b[33m[SMOKE] {}\x1b[0m", line));
-                }
-            }
-        }
-
-        // Surface a positive reinforcement so the agent learns that small,
-        // library-using code is what gets rewarded. Only delivered when the
-        // file is clean by all our measures.
+        let mut context_parts: Vec<String> = additional_context_lines;
         if is_clean {
-            let clean_msg = format!(
-                "This change is clean: small file ({} lines), no stdlib duplicates, no large deletion. This is the kind of edit SMOKE rewards.",
-                code_content.lines().count()
-            );
-            crate::sandbox::print_to_terminal(&format!("\x1b[32m[SMOKE] {}\x1b[0m", clean_msg));
-
-            let output = HookOutput {
-                hook_specific_output: HookSpecificOutput {
-                    hook_event_name: "PreToolUse".to_string(),
-                    permission_decision: "allow".to_string(),
-                    permission_decision_reason: reason,
-                    additional_context: Some(clean_msg),
-                    updated_input: None,
-                },
-            };
-            println!("{}", serde_json::to_string(&output)?);
-            std::process::exit(0);
+            context_parts.push(format!(
+                "✅ SMOKE: {} {} — small file ({} lines), clean, no issues detected.",
+                file_name, exec_label, resulting_lines
+            ));
+        } else {
+            context_parts.insert(0, format!("✅ SMOKE: {} {}", file_name, exec_label));
         }
 
+        let additional_context = Some(context_parts.join("\n\n"));
         let output = HookOutput {
-            hook_specific_output: HookSpecificOutput {
-                hook_event_name: "PreToolUse".to_string(),
-                permission_decision: "allow".to_string(),
-                permission_decision_reason: reason,
-                additional_context,
-                updated_input: None,
-            },
+            decision: "approve".to_string(),
+            reason: None,
+            additional_context,
         };
         println!("{}", serde_json::to_string(&output)?);
         std::process::exit(0);
@@ -624,67 +558,63 @@ pub async fn run() -> anyhow::Result<()> {
             let fp = crate::state::fingerprint(file_path, "runtime_error", err_msg);
             let count = state.record_failure(&fp, file_path, err_msg, cfg.loop_detection.fingerprint_window_minutes);
             let escalation = crate::state::escalation_for(count, cfg.loop_detection.warn_threshold, cfg.loop_detection.escalate_threshold);
-            let _ = state.save(&input.session_id); // Save mutated state
+            let _ = state.save(&input.session_id);
 
             match escalation {
                 crate::state::EscalationLevel::Normal => {}
                 crate::state::EscalationLevel::Notice => {
-                    loop_msg = Some(format!("⚠️ SMOKE: this is attempt #{} with the same error signature on {}.", count, file_path));
+                    loop_msg = Some(format!("⚠️ This is attempt #{} with the same runtime error on {}. Please re-read the error carefully.", count, file_path));
                 }
                 crate::state::EscalationLevel::Escalate => {
                     loop_msg = Some(format!(
-                        "🛑 SMOKE: {} consecutive failures with the same error signature on {}.\n\nStop retrying variations of the same fix — it isn't addressing the root cause.\nBefore the next edit:\n  1. Re-read the actual error text below, in full.\n  2. State your hypothesis for the root cause in one sentence.\n  3. If you're not confident in the hypothesis, ask the user for guidance instead of editing again.\n\nLast error:\n{}",
+                        "🛑 {} consecutive failures with the same runtime error on {}.\n\nStop retrying variations of the same fix.\nBefore the next edit:\n  1. Re-read the actual error text below, in full.\n  2. State your hypothesis for the root cause in one sentence.\n  3. If you're not confident, ask the user for guidance.\n\nLast error:\n{}",
                         count, file_path, cleaned_stderr
                     ));
                 }
             }
         }
 
-        let should_block = match cfg.hook.mode {
-            crate::config::HookMode::Silent => false,
-            crate::config::HookMode::Advisor => false,
-            crate::config::HookMode::Strict => {
-                is_standalone_runnable(&code_content, &ext)
+        match cfg.hook.mode {
+            crate::config::HookMode::Guided => {
+                // Block with a clear "fix and retry" instruction
+                let mut reason = format!(
+                    "🔍 SMOKE detected a runtime error in {}:\n\n{}\n\nPlease fix this error and rewrite the file.",
+                    file_path, cleaned_stderr
+                );
+                if let Some(ref msg) = loop_msg {
+                    reason = format!("{}\n\n{}", msg, reason);
+                }
+                crate::sandbox::print_to_terminal(&format!("\x1b[31m[SMOKE] Blocked {} — runtime error\x1b[0m", file_path));
+                let output = HookOutput {
+                    decision: "block".to_string(),
+                    reason: Some(reason),
+                    additional_context: None,
+                };
+                println!("{}", serde_json::to_string(&output)?);
+                std::process::exit(0);
             }
-        };
+            crate::config::HookMode::Advisor => {
+                // Allow but inject warning
+                if let Some(ref msg) = loop_msg {
+                    crate::sandbox::print_to_terminal(&format!("\x1b[33m[SMOKE] {}\x1b[0m", msg));
+                    additional_context_lines.push(msg.clone());
+                }
+                let warn_msg = format!("⚠️ SMOKE runtime warning in {}:\n{}", file_path, cleaned_stderr);
+                crate::sandbox::print_to_terminal(&format!("\x1b[33m[SMOKE] {}\x1b[0m", warn_msg));
+                additional_context_lines.push(warn_msg);
 
-        if should_block {
-            if let Some(ref msg) = loop_msg {
-                eprintln!("{}\n", msg);
-            }
-            // Exit code 2 blocks the tool call in Claude Code, showing stderr to the agent
-            eprintln!("SMOKE: {}", cleaned_stderr);
-            std::process::exit(2);
-        } else {
-            if let Some(ref msg) = loop_msg {
-                crate::sandbox::print_to_terminal(&format!("\x1b[33m[SMOKE] {}\x1b[0m", msg));
-                additional_context_lines.push(msg.clone());
-            }
-
-            let warn_msg = format!(
-                "⚠️ SMOKE execution warning in {}:\n{}",
-                file_path, cleaned_stderr
-            );
-            crate::sandbox::print_to_terminal(&format!("\x1b[33m[SMOKE] {}\x1b[0m", warn_msg));
-            additional_context_lines.push(warn_msg);
-
-            let additional_context = if additional_context_lines.is_empty() {
-                None
-            } else {
-                Some(additional_context_lines.join("\n\n"))
-            };
-
-            let output = HookOutput {
-                hook_specific_output: HookSpecificOutput {
-                    hook_event_name: "PreToolUse".to_string(),
-                    permission_decision: "allow".to_string(),
-                    permission_decision_reason: "SMOKE: allowed with execution warnings".to_string(),
+                let additional_context = Some(additional_context_lines.join("\n\n"));
+                let output = HookOutput {
+                    decision: "approve".to_string(),
+                    reason: None,
                     additional_context,
-                    updated_input: None,
-                },
-            };
-            println!("{}", serde_json::to_string(&output)?);
-            std::process::exit(0);
+                };
+                println!("{}", serde_json::to_string(&output)?);
+                std::process::exit(0);
+            }
+            crate::config::HookMode::Silent => {
+                approve_silent();
+            }
         }
     }
 }
@@ -715,15 +645,23 @@ fn is_standalone_runnable(code: &str, ext: &str) -> bool {
     !has_import && !has_export && !has_jsx
 }
 
+fn approve_silent() -> ! {
+    let output = HookOutput {
+        decision: "approve".to_string(),
+        reason: None,
+        additional_context: None,
+    };
+    if let Ok(json) = serde_json::to_string(&output) {
+        println!("{}", json);
+    }
+    std::process::exit(0);
+}
+
 fn allow_with_reason(reason: &str) -> ! {
     let output = HookOutput {
-        hook_specific_output: HookSpecificOutput {
-            hook_event_name: "PreToolUse".to_string(),
-            permission_decision: "allow".to_string(),
-            permission_decision_reason: reason.to_string(),
-            additional_context: None,
-            updated_input: None,
-        },
+        decision: "approve".to_string(),
+        reason: None,
+        additional_context: Some(reason.to_string()),
     };
     if let Ok(json) = serde_json::to_string(&output) {
         println!("{}", json);
@@ -904,13 +842,9 @@ mod tests {
     #[test]
     fn additional_context_serializes_when_present() {
         let out = HookOutput {
-            hook_specific_output: HookSpecificOutput {
-                hook_event_name: "PreToolUse".to_string(),
-                permission_decision: "allow".to_string(),
-                permission_decision_reason: "test".to_string(),
-                additional_context: Some("hello agent".to_string()),
-                updated_input: None,
-            },
+            decision: "approve".to_string(),
+            reason: None,
+            additional_context: Some("hello agent".to_string()),
         };
         let json = serde_json::to_string(&out).unwrap();
         assert!(json.contains("additionalContext"), "json should contain additionalContext field: {}", json);
@@ -920,13 +854,9 @@ mod tests {
     #[test]
     fn additional_context_omitted_when_none() {
         let out = HookOutput {
-            hook_specific_output: HookSpecificOutput {
-                hook_event_name: "PreToolUse".to_string(),
-                permission_decision: "allow".to_string(),
-                permission_decision_reason: "test".to_string(),
-                additional_context: None,
-                updated_input: None,
-            },
+            decision: "approve".to_string(),
+            reason: None,
+            additional_context: None,
         };
         let json = serde_json::to_string(&out).unwrap();
         assert!(!json.contains("additionalContext"), "additionalContext should be omitted when None: {}", json);

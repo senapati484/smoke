@@ -9,7 +9,7 @@
 $ErrorActionPreference = "Stop"
 
 Write-Host "╔══════════════════════════════════════╗" -ForegroundColor Blue
-Write-Host "║       SMOKE Uninstaller               ║" -ForegroundColor Blue
+Write-Host "║       SMOKE Uninstaller              ║" -ForegroundColor Blue
 Write-Host "╚══════════════════════════════════════╝" -ForegroundColor Blue
 Write-Host ""
 
@@ -57,7 +57,7 @@ if ($UserPath -like "*$InstallDir*") {
 # ── Done ──────────────────────────────────────────────────────────────────────
 Write-Host ""
 Write-Host "╔══════════════════════════════════════╗" -ForegroundColor Green
-Write-Host "║     SMOKE uninstalled successfully!   ║" -ForegroundColor Green
+Write-Host "║     SMOKE uninstalled successfully!  ║" -ForegroundColor Green
 Write-Host "╚══════════════════════════════════════╝" -ForegroundColor Green
 Write-Host ""
 Write-Host "SMOKE has been fully removed."

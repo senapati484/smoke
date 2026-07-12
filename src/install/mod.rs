@@ -260,16 +260,22 @@ fn register_claude_code(binary: &str) -> Result<()> {
         data["hooks"] = json!({});
     }
 
-    // PreToolUse — find or create the Write|Edit matcher entry
+    // Clean up any stale/duplicate smoke hook entries from old installs.
+    // Previous versions registered under "Write|Edit" before MultiEdit was added,
+    // which caused duplicate hook firings. Remove them before upserting the canonical form.
+    remove_stale_smoke_hooks(&mut data, "PreToolUse", "Write|Edit", "smoke hook");
+    remove_stale_smoke_hooks(&mut data, "PostToolUse", "Write|Edit", "smoke post-hook");
+
+    // PreToolUse — find or create the Write|Edit|MultiEdit matcher entry
     let pre_hook = json!({
         "type": "command",
         "command": format!("{} hook", binary),
-        "timeout": 10,
+        "timeout": 30,
         "statusMessage": "SMOKE: verifying code..."
     });
     upsert_hook(&mut data, "PreToolUse", "Write|Edit|MultiEdit", pre_hook, "smoke hook");
 
-    // PostToolUse — find or create the Write|Edit matcher entry
+    // PostToolUse — find or create the Write|Edit|MultiEdit matcher entry
     let post_hook = json!({
         "type": "command",
         "command": format!("{} post-hook", binary),
@@ -280,6 +286,30 @@ fn register_claude_code(binary: &str) -> Result<()> {
     write_json(&path, &data)
         .with_context(|| format!("writing Claude Code settings to {}", path.display()))?;
     Ok(())
+}
+
+/// Remove any existing smoke hook entries registered under a stale/legacy matcher string.
+/// This prevents duplicate hook firings when the matcher changed between versions.
+/// Only removes the inner hook command; if the matcher entry's hooks array becomes
+/// empty after removal, the entire matcher entry is dropped.
+fn remove_stale_smoke_hooks(data: &mut Value, event: &str, stale_matcher: &str, identity: &str) {
+    if let Some(arr) = data["hooks"][event].as_array_mut() {
+        arr.retain_mut(|entry| {
+            if entry.get("matcher").and_then(|m| m.as_str()) == Some(stale_matcher) {
+                if let Some(inner) = entry["hooks"].as_array_mut() {
+                    inner.retain(|h| {
+                        !h.get("command")
+                            .and_then(|c| c.as_str())
+                            .unwrap_or("")
+                            .contains(identity)
+                    });
+                    // Drop the whole matcher entry if no hooks remain
+                    return !inner.is_empty();
+                }
+            }
+            true
+        });
+    }
 }
 
 /// Upsert a hook command into a PreToolUse/PostToolUse matcher array,

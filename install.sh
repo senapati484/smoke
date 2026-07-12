@@ -20,7 +20,7 @@ log_yellow() { printf "${YELLOW}%b${NC}\n" "$1"; }
 log_plain()  { printf "%b\n" "$1"; }
 
 printf "${BLUE}╔══════════════════════════════════════╗${NC}\n"
-printf "${BLUE}║        SMOKE Installer                ║${NC}\n"
+printf "${BLUE}║        SMOKE Installer               ║${NC}\n"
 printf "${BLUE}╚══════════════════════════════════════╝${NC}\n\n"
 
 # ── Step 1: Check Rust / Cargo ────────────────────────────────────────────────
@@ -153,7 +153,7 @@ fi
 # ── Done ──────────────────────────────────────────────────────────────────────
 printf "\n"
 printf "${GREEN}╔══════════════════════════════════════╗${NC}\n"
-printf "${GREEN}║     SMOKE installed successfully!     ║${NC}\n"
+printf "${GREEN}║     SMOKE installed successfully!    ║${NC}\n"
 printf "${GREEN}╚══════════════════════════════════════╝${NC}\n\n"
 
 printf "Next steps:\n"

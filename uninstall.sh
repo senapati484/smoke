@@ -18,7 +18,7 @@ CYAN='\033[0;36m'
 NC='\033[0m'
 
 printf "${BLUE}╔══════════════════════════════════════╗${NC}\n"
-printf "${BLUE}║       SMOKE Uninstaller               ║${NC}\n"
+printf "${BLUE}║       SMOKE Uninstaller              ║${NC}\n"
 printf "${BLUE}╚══════════════════════════════════════╝${NC}\n\n"
 
 BINARY="$HOME/.smoke/bin/smoke"
@@ -70,7 +70,7 @@ fi
 # ── Done ──────────────────────────────────────────────────────────────────────
 printf "\n"
 printf "${GREEN}╔══════════════════════════════════════╗${NC}\n"
-printf "${GREEN}║     SMOKE uninstalled successfully!   ║${NC}\n"
+printf "${GREEN}║     SMOKE uninstalled successfully!  ║${NC}\n"
 printf "${GREEN}╚══════════════════════════════════════╝${NC}\n\n"
 
 printf "SMOKE has been fully removed.\n"

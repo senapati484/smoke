@@ -1,7 +1,7 @@
 [package]
 name = "smoke"
 version = "0.1.0"
-edition = "2021"
+edition = "2024"
 description = "A PreToolUse hook for Claude Code that runs AI-generated code in a sandbox before writes are allowed"
 license = "Apache-2.0"
 

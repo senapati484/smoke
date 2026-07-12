@@ -10,7 +10,7 @@ $ErrorActionPreference = "Stop"
 
 # ── Header ────────────────────────────────────────────────────────────────────
 Write-Host "╔══════════════════════════════════════╗" -ForegroundColor Blue
-Write-Host "║        SMOKE Installer                ║" -ForegroundColor Blue
+Write-Host "║        SMOKE Installer               ║" -ForegroundColor Blue
 Write-Host "╚══════════════════════════════════════╝" -ForegroundColor Blue
 Write-Host ""
 
@@ -138,7 +138,7 @@ if ($TempDir -and (Test-Path $TempDir)) {
 # ── Done ──────────────────────────────────────────────────────────────────────
 Write-Host ""
 Write-Host "╔══════════════════════════════════════╗" -ForegroundColor Green
-Write-Host "║     SMOKE installed successfully!     ║" -ForegroundColor Green
+Write-Host "║     SMOKE installed successfully!    ║" -ForegroundColor Green
 Write-Host "╚══════════════════════════════════════╝" -ForegroundColor Green
 Write-Host ""
 Write-Host "Next steps:"
