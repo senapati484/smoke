@@ -12,6 +12,8 @@
 use anyhow::{Context, Result};
 use serde_json::{json, Value};
 use std::path::PathBuf;
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
 
 // ── Tool enum ────────────────────────────────────────────────────────────────
 
@@ -98,6 +100,93 @@ pub fn installed_binary() -> PathBuf {
         home.join(".smoke").join("bin").join("smoke.exe")
     } else {
         home.join(".smoke").join("bin").join("smoke")
+    }
+}
+
+// ── Self-install (copy binary + configure PATH) ──────────────────────────────
+
+/// Copy the running binary to `~/.smoke/bin/smoke` and add it to the user's
+/// shell PATH config. Called automatically by `smoke install` so users never
+/// need to manually copy the binary after building from source.
+///
+/// Idempotent — safe to call multiple times. Only copies when the target is
+/// absent or differs from the running binary.
+pub fn self_install() -> Result<()> {
+    let current_exe = std::env::current_exe()
+        .context("could not determine current executable path")?;
+    let target = installed_binary();
+
+    // 1. Create install directory
+    if let Some(parent) = target.parent() {
+        std::fs::create_dir_all(parent)
+            .with_context(|| format!("creating {}", parent.display()))?;
+    }
+
+    // 2. Copy binary only when absent or different
+    let need_copy = !target.exists()
+        || std::fs::canonicalize(&current_exe).ok()
+            != std::fs::canonicalize(&target).ok();
+
+    if need_copy {
+        std::fs::copy(&current_exe, &target)
+            .with_context(|| format!("copying binary to {}", target.display()))?;
+
+        // Make executable on Unix
+        #[cfg(unix)]
+        std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o755))
+            .with_context(|| format!("setting permissions on {}", target.display()))?;
+
+        // codesign on macOS prevents AMFI / SIGKILL when hook fires
+        #[cfg(target_os = "macos")]
+        {
+            let _ = std::process::Command::new("codesign")
+                .args(["--force", "--sign", "-",
+                       target.to_str().unwrap_or("")])
+                .output();
+        }
+
+        println!("  \x1b[32m✓\x1b[0m Binary installed → {}", target.display());
+    } else {
+        println!("  \x1b[32m✓\x1b[0m Binary already up-to-date at {}", target.display());
+    }
+
+    // 3. Add ~/.smoke/bin to PATH in shell config (idempotent)
+    if let Some(cfg_path) = detect_shell_config() {
+        let content = std::fs::read_to_string(&cfg_path).unwrap_or_default();
+        if !content.contains(".smoke/bin") {
+            let install_dir = target.parent().unwrap();
+            let addition = format!(
+                "\n# SMOKE\nexport PATH=\"{}:$PATH\"\n",
+                install_dir.display()
+            );
+            use std::io::Write;
+            let mut file = std::fs::OpenOptions::new()
+                .append(true)
+                .open(&cfg_path)
+                .with_context(|| format!("opening {}", cfg_path.display()))?;
+            file.write_all(addition.as_bytes())
+                .with_context(|| format!("writing PATH to {}", cfg_path.display()))?;
+            println!("  \x1b[32m✓\x1b[0m Added ~/.smoke/bin to PATH in {}", cfg_path.display());
+            println!("  \x1b[33m!\x1b[0m Reload your shell: \x1b[36msource {}\x1b[0m", cfg_path.display());
+        } else {
+            println!("  \x1b[32m✓\x1b[0m PATH already configured in {}", cfg_path.display());
+        }
+    }
+
+    Ok(())
+}
+
+fn detect_shell_config() -> Option<PathBuf> {
+    let home = dirs::home_dir()?;
+    let shell = std::env::var("SHELL").unwrap_or_default();
+    if shell.contains("zsh") || home.join(".zshrc").exists() {
+        Some(home.join(".zshrc"))
+    } else if shell.contains("bash") || home.join(".bashrc").exists() {
+        Some(home.join(".bashrc"))
+    } else if home.join(".bash_profile").exists() {
+        Some(home.join(".bash_profile"))
+    } else {
+        Some(home.join(".profile"))
     }
 }
 
@@ -237,15 +326,16 @@ pub fn register(tools: &[Tool]) -> Result<()> {
         };
 
         match result {
-            Ok(()) => println!(
-                "  \x1b[32m✓\x1b[0m {} registered",
-                tool.display_name()
-            ),
-            Err(e) => eprintln!(
-                "  \x1b[31m✗\x1b[0m {} failed: {}",
-                tool.display_name(),
-                e
-            ),
+            Ok(()) => println!("  \x1b[32m✓\x1b[0m {} registered", tool.display_name()),
+            Err(e) => {
+                let msg = e.to_string();
+                // "not installed" is expected for tools the user doesn't have — show as skip, not error
+                if msg.contains("not installed") || msg.contains("tool not found") {
+                    println!("  \x1b[33m⊘\x1b[0m {} — skipped ({})", tool.display_name(), msg);
+                } else {
+                    eprintln!("  \x1b[31m✗\x1b[0m {} — failed: {}", tool.display_name(), e);
+                }
+            }
         }
     }
     Ok(())
@@ -352,6 +442,19 @@ fn upsert_hook(data: &mut Value, event: &str, matcher: &str, hook: Value, identi
 }
 
 fn register_mcp(path: &std::path::Path, binary: &str, tool: &Tool) -> Result<()> {
+    // Only create new config files if the tool's config directory already exists
+    // on disk (meaning the tool is actually installed). This prevents creating
+    // stray files like ~/.cursor/mcp.json for tools the user doesn't have.
+    if !path.exists() {
+        let parent = path.parent().unwrap_or(path);
+        if !parent.exists() {
+            anyhow::bail!(
+                "{} config directory not found — tool not installed",
+                tool.display_name()
+            );
+        }
+    }
+
     let mut data = read_json(path);
 
     if data.get("mcpServers").is_none() {
@@ -477,12 +580,13 @@ pub fn status() {
     println!("  Binary: {}", if binary.exists() {
         format!("\x1b[32m{}\x1b[0m (installed)", binary.display())
     } else {
-        format!("\x1b[31m{}\x1b[0m (not found)", binary.display())
+        format!("\x1b[31m{}\x1b[0m (not found — run \x1b[36msmoke install\x1b[0m)", binary.display())
     });
     println!();
 
     for tool in Tool::all() {
         let registered = is_registered(&tool);
+        let tool_present = is_tool_installed(&tool);
         let paths = config_paths(&tool);
         let path_str = paths
             .iter()
@@ -493,14 +597,17 @@ pub fn status() {
         if registered {
             println!(
                 "  \x1b[32m✓\x1b[0m  {:<20}  {}",
-                tool.display_name(),
-                path_str
+                tool.display_name(), path_str
+            );
+        } else if tool_present {
+            println!(
+                "  \x1b[31m✗\x1b[0m  {:<20}  {} \x1b[2m(not registered — run smoke install)\x1b[0m",
+                tool.display_name(), path_str
             );
         } else {
             println!(
-                "  \x1b[31m✗\x1b[0m  {:<20}  {} \x1b[2m(not registered)\x1b[0m",
-                tool.display_name(),
-                path_str
+                "  \x1b[2m⊘\x1b[0m  {:<20}  \x1b[2m(not installed)\x1b[0m",
+                tool.display_name()
             );
         }
     }
@@ -512,7 +619,6 @@ fn is_registered(tool: &Tool) -> bool {
             let path = config_paths(tool).remove(0);
             if !path.exists() { return false; }
             let data = read_json(&path);
-            // Check if "smoke hook" appears in any PreToolUse hook command
             data["hooks"]["PreToolUse"]
                 .as_array()
                 .map(|entries| {
@@ -533,12 +639,30 @@ fn is_registered(tool: &Tool) -> bool {
                 .unwrap_or(false)
         }
         _ => {
-            // For MCP tools: check the first path
             let paths = config_paths(tool);
             paths.iter().any(|path| {
                 if !path.exists() { return false; }
                 let data = read_json(path);
                 data["mcpServers"]["smoke"].is_object()
+            })
+        }
+    }
+}
+
+/// Returns true if the tool appears to be installed on this machine.
+/// For Claude Code, checks whether the config directory exists.
+/// For MCP tools, checks whether the tool's config parent directory exists.
+fn is_tool_installed(tool: &Tool) -> bool {
+    match tool {
+        Tool::ClaudeCode => {
+            // Claude Code creates ~/.claude when installed
+            let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("~"));
+            home.join(".claude").exists()
+        }
+        _ => {
+            // For MCP tools, check if at least one of their config parent dirs exists
+            config_paths(tool).iter().any(|p| {
+                p.parent().map(|d| d.exists()).unwrap_or(false)
             })
         }
     }
@@ -649,5 +773,17 @@ mod tests {
         let data = read_json(&path);
         assert_eq!(data["mcpServers"]["smoke"]["disabled"].as_bool(), Some(false));
         assert!(data["mcpServers"]["smoke"]["alwaysAllow"].is_array());
+    }
+
+    #[test]
+    fn register_mcp_fails_on_missing_dir() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("nonexistent_dir").join("mcp.json");
+        let binary = "/usr/local/bin/smoke";
+
+        let res = register_mcp(&path, binary, &Tool::Cursor);
+        assert!(res.is_err());
+        let err_msg = res.unwrap_err().to_string();
+        assert!(err_msg.contains("not installed"), "Expected error message to mention 'not installed', got: {}", err_msg);
     }
 }

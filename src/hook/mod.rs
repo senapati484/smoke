@@ -699,6 +699,7 @@ pub async fn run() -> anyhow::Result<()> {
     }
 }
 
+#[allow(dead_code)]
 fn is_standalone_runnable(code: &str, ext: &str) -> bool {
     // If it's a JSX/TSX file, it's never standalone runnable.
     if matches!(ext, "tsx" | "jsx") {

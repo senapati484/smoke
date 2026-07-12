@@ -194,6 +194,10 @@ fn run_config(action: ConfigAction) -> Result<()> {
 }
 
 fn run_install(tools_str: &str) -> Result<()> {
+    println!("SMOKE: preparing binary and path...");
+    install::self_install()?;
+    println!();
+
     let tools = install::parse_tools(tools_str);
     if tools.is_empty() {
         eprintln!("SMOKE: no valid tools specified. Use --tools all or a comma-separated list.");
