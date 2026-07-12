@@ -170,6 +170,71 @@ pub async fn run() -> anyhow::Result<()> {
     match input.tool_name.as_str() {
         "Write" => {
             code_content = input.tool_input.get("content").and_then(|v| v.as_str()).unwrap_or("").to_string();
+
+            // ── Job 1: Large-write check ─────────────────────────────────────
+            // If the AI is writing a very large block of code at once, ask it
+            // to reconsider before the file lands on disk. In guided mode this
+            // blocks; in advisor mode it injects a soft context message.
+            if cfg.prompts.large_write_threshold > 0 {
+                let new_line_count = code_content.lines().count();
+                if new_line_count >= cfg.prompts.large_write_threshold {
+                    let large_msg = format!(
+                        "⚠️ SMOKE: This Write adds {} lines to {}.\
+                        \n\nBefore writing this much code at once, please reconsider:\
+                        \n  1. Is there an existing package (npm / PyPI / crates.io) that already provides any of this functionality?\
+                        \n  2. Can this be split into smaller, more focused functions or files?\
+                        \n  3. Are all {} lines truly necessary for this task, or could some be simplified or removed?\
+                        \n\nIf you are confident all lines are necessary, restate why and proceed with the write.",
+                        new_line_count, file_path, new_line_count
+                    );
+                    match cfg.hook.mode {
+                        crate::config::HookMode::Guided => {
+                            crate::sandbox::print_to_terminal(&format!("\x1b[33m[SMOKE] Pausing large write ({} lines) of {} for AI review...\x1b[0m", new_line_count, file_path));
+                            let output = HookOutput {
+                                decision: "block".to_string(),
+                                reason: Some(large_msg),
+                                additional_context: None,
+                            };
+                            println!("{}", serde_json::to_string(&output)?);
+                            std::process::exit(0);
+                        }
+                        crate::config::HookMode::Advisor => {
+                            additional_context_lines.push(large_msg);
+                        }
+                        crate::config::HookMode::Silent => {}
+                    }
+                }
+            }
+
+            // ── Job 2: Deletion check on Write ───────────────────────────────
+            // If the file already exists and the new content is significantly
+            // shorter, treat this like a large Edit deletion and ask the AI
+            // to confirm the removal is intentional.
+            let existing_path = Path::new(&input.cwd).join(file_path);
+            if existing_path.exists() {
+                if let Ok(existing_content) = std::fs::read_to_string(&existing_path) {
+                    if let Some(del_ctx) = build_anti_deletion_context(&existing_content, &code_content, &cfg.prompts) {
+                        match cfg.hook.mode {
+                            crate::config::HookMode::Guided => {
+                                crate::sandbox::print_to_terminal(&format!("\x1b[33m[SMOKE] Large deletion detected in {}...\x1b[0m", file_path));
+                                let output = HookOutput {
+                                    decision: "block".to_string(),
+                                    reason: Some(del_ctx),
+                                    additional_context: None,
+                                };
+                                println!("{}", serde_json::to_string(&output)?);
+                                std::process::exit(0);
+                            }
+                            crate::config::HookMode::Advisor => {
+                                additional_context_lines.push(del_ctx);
+                            }
+                            crate::config::HookMode::Silent => {}
+                        }
+                    }
+                }
+            }
+
+            // ── Job 3: Syntax check ──────────────────────────────────────────
             // Fast syntax check on Write content
             if let Some(err_msg) = crate::parser::check_syntax(&code_content, lang_id) {
                 let mut loop_msg = None;
@@ -329,12 +394,27 @@ pub async fn run() -> anyhow::Result<()> {
                 }
             }
 
-            // Anti-deletion prompt: surface to the agent that a large chunk of
-            // code was removed. This is a soft signal — the write still goes
-            // through — but Claude sees it as a system reminder in its context
-            // and can re-think if the deletion was unintentional.
-            if let Some(ctx) = build_anti_deletion_context(&file_content, &patched_content, &cfg.prompts) {
-                additional_context_lines.push(ctx);
+            // ── Job 2: Anti-deletion check on Edit ───────────────────────────
+            // Surface large deletions to the AI and ask it to confirm they are
+            // intentional. In guided mode this blocks the edit; in advisor mode
+            // it injects a soft context message that appears on the next turn.
+            if let Some(del_ctx) = build_anti_deletion_context(&file_content, &patched_content, &cfg.prompts) {
+                match cfg.hook.mode {
+                    crate::config::HookMode::Guided => {
+                        crate::sandbox::print_to_terminal(&format!("\x1b[33m[SMOKE] Large deletion detected in {}...\x1b[0m", file_path));
+                        let output = HookOutput {
+                            decision: "block".to_string(),
+                            reason: Some(del_ctx),
+                            additional_context: None,
+                        };
+                        println!("{}", serde_json::to_string(&output)?);
+                        std::process::exit(0);
+                    }
+                    crate::config::HookMode::Advisor => {
+                        additional_context_lines.push(del_ctx);
+                    }
+                    crate::config::HookMode::Silent => {}
+                }
             }
 
             if line_count > cfg.limits.max_file_lines {
@@ -708,11 +788,13 @@ pub fn build_anti_deletion_context(before: &str, after: &str, prompts: &crate::c
     }
 
     Some(format!(
-        "This Edit removed {} lines ({}% of the prior file) and added {} new lines. \
-The removed code may still be referenced elsewhere in the codebase, in tests, \
-in documentation, or by callers outside this file. There may also be a \
-stdlib or library helper that already does what the new code does.",
-        removed, removed_pct, added
+        "⚠️ SMOKE: This edit removes {} lines ({}% of the file) and adds {} new lines.\
+        \n\nBefore applying this deletion, please confirm:\
+        \n  1. Are all {} removed lines truly no longer needed anywhere in the codebase (imports, tests, other callers)?\
+        \n  2. Could any of the removed code be kept and reused, rather than deleted entirely?\
+        \n  3. If you are unsure, consider keeping the code and refactoring instead of deleting.\
+        \n\nIf you are confident the deletion is correct, explain why briefly and retry the edit.",
+        removed, removed_pct, added, removed
     ))
 }
 
@@ -816,9 +898,15 @@ mod tests {
             after = after.replace(&format!("line {}\n", i), "");
         }
 
-        // Default threshold (30%) — 15% deletion should not fire
-        let ctx = build_anti_deletion_context(&before, &after, &crate::config::Prompts::default());
-        assert!(ctx.is_none(), "15% deletion should not fire at default 30% threshold");
+        // Use an explicit config where neither gate fires for this 15%/30-line removal.
+        // (Default thresholds changed over time; using explicit values keeps the test stable.)
+        let high_threshold = crate::config::Prompts {
+            deletion_lines_threshold: 50,   // 30 lines removed < 50 threshold → no count-based fire
+            deletion_percent_threshold: 30, // 15% removed < 30% threshold → no percent-based fire
+            ..crate::config::Prompts::default()
+        };
+        let ctx = build_anti_deletion_context(&before, &after, &high_threshold);
+        assert!(ctx.is_none(), "15% / 30-line deletion should not fire at 50-line / 30% threshold");
 
         // Custom threshold of 10% — should fire
         let aggressive = crate::config::Prompts {

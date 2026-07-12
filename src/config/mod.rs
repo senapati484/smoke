@@ -108,10 +108,10 @@ pub struct PythonConfig {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Prompts {
-    /// Fire the anti-deletion prompt when an Edit removes at least this many lines.
+    /// Fire the anti-deletion prompt when an Edit/Write removes at least this many lines.
     /// Set to 0 to never fire on raw line count.
     pub deletion_lines_threshold: usize,
-    /// Fire the anti-deletion prompt when an Edit removes at least this percent
+    /// Fire the anti-deletion prompt when an Edit/Write removes at least this percent
     /// of the file. Set to 101 to never fire on percent.
     pub deletion_percent_threshold: usize,
     /// Fire the writing-side stdlib hint when the new code adds at least this
@@ -124,6 +124,9 @@ pub struct Prompts {
     /// at most this many lines. Larger additions are not praised (they may
     /// belong to one of the other prompts anyway).
     pub clean_max_added_lines: usize,
+    /// In guided mode, block a Write that adds at least this many lines and ask
+    /// the AI to reconsider before writing a large block. Set to 0 to disable.
+    pub large_write_threshold: usize,
 }
 
 // ── Defaults ────────────────────────────────────────────────────────────────
@@ -178,15 +181,18 @@ impl Default for PythonConfig {
 
 impl Default for Prompts {
     fn default() -> Self {
-        // Defaults match the constants previously hardcoded in the hook.
-        // Projects that want SMOKE to be quieter can raise these; projects
-        // that want more aggressive coaching can lower them.
         Self {
-            deletion_lines_threshold: 50,
+            // Fire deletion prompt when ≥30 lines removed (or ≥30% of file).
+            // Previously 50; lowered so the AI gets feedback on moderate refactors too.
+            deletion_lines_threshold: 30,
             deletion_percent_threshold: 30,
-            writing_size_threshold: 100,
+            // Fire stdlib hint when the Write/Edit adds ≥50 lines.
+            // Previously 100; lowered so the AI gets nudged on medium-sized writes.
+            writing_size_threshold: 50,
             clean_file_line_threshold: 50,
             clean_max_added_lines: 30,
+            // Pause and ask AI to reconsider when writing ≥150 lines at once.
+            large_write_threshold: 150,
         }
     }
 }
@@ -275,6 +281,7 @@ struct PartialPrompts {
     writing_size_threshold: Option<usize>,
     clean_file_line_threshold: Option<usize>,
     clean_max_added_lines: Option<usize>,
+    large_write_threshold: Option<usize>,
 }
 
 fn load_file(path: &Path) -> Option<PartialConfig> {
@@ -314,6 +321,7 @@ fn merge(mut base: Config, overlay: Option<PartialConfig>) -> Config {
             if let Some(v) = prompts.writing_size_threshold { base.prompts.writing_size_threshold = v; }
             if let Some(v) = prompts.clean_file_line_threshold { base.prompts.clean_file_line_threshold = v; }
             if let Some(v) = prompts.clean_max_added_lines { base.prompts.clean_max_added_lines = v; }
+            if let Some(v) = prompts.large_write_threshold { base.prompts.large_write_threshold = v; }
         }
         if let Some(hook) = over.hook {
             if let Some(v) = hook.mode { base.hook.mode = v; }
@@ -381,28 +389,29 @@ rust_enabled = true
 interpreter = "python3"
 
 [prompts]
-# Soft-prompt thresholds. SMOKE delivers these via Claude Code's
-# additionalContext field — they appear in the model's context as system
-# reminders, never as blocks. Tune these to make SMOKE quieter (higher
-# thresholds) or more aggressive (lower thresholds).
-#
-# Anti-deletion prompt: fires when an Edit removes at least N lines OR
-# at least P percent of the file (whichever matches first). Set lines
-# to 0 to disable the line-count check, or percent to 101 to disable
-# the percent check.
-deletion_lines_threshold   = 50
+# Thresholds for SMOKE's three core prompts.
+
+# Job 2 — DELETION: ask the AI to reconsider when it deletes a lot of code.
+# Fires when an Edit/Write removes at least N lines OR at least P% of the file.
+# Set deletion_lines_threshold to 0 to disable the line-count check.
+# Set deletion_percent_threshold to 101 to disable the percent check.
+deletion_lines_threshold   = 30
 deletion_percent_threshold = 30
 
-# Writing-side stdlib hint: fires when the Edit/Write adds at least N
-# lines AND the new code matches a known "roll-your-own" pattern
-# (custom debounce, deep-clone via JSON.parse/stringify, hand-rolled
-# UUID, manual chunking, etc.). Set to 0 to disable.
-writing_size_threshold = 100
+# Job 1 — LARGE WRITE: ask the AI to reconsider writing too much at once.
+# In guided mode, blocks the write and asks the AI:
+#   "Is there a package for any of this? Can you split this into smaller pieces?"
+# Set to 0 to disable.
+large_write_threshold = 150
 
-# Positive "clean" reinforcement: fires when the resulting file is
-# small (< clean_file_line_threshold) AND the Edit/Write added few
-# lines (≤ clean_max_added_lines) AND no other soft prompts fired.
-# Set either to 0 to disable.
+# Job 1 (pattern detection) — stdlib/package hint: fires when the Write/Edit
+# adds at least N lines AND the code matches a known roll-your-own pattern
+# (custom debounce, UUID, deep-clone, retry, memoize, etc.).
+# Set to 0 to disable the size gate (always fire when a pattern matches).
+writing_size_threshold = 50
+
+# Positive "clean" reinforcement: fires when the file is small and no other
+# prompts fired. Set either to 0 to disable.
 clean_file_line_threshold = 50
 clean_max_added_lines     = 30
 

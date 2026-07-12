@@ -194,12 +194,86 @@ const ROLL_YOUR_OWN_PATTERNS: &[(&str, PatternMatcher, &str)] = &[
     (
         "manual-chunking",
         |c| {
-            // Look for a function named `chunk` that takes an array and a size.
-            // The substring `function chunk(` or `const chunk =` is distinctive
-            // enough; we don't try to validate the body.
             contains_word(c, "chunk") && (c.contains("function chunk") || c.contains("const chunk =") || c.contains("def chunk"))
         },
         "Detected a custom `chunk` function (splitting an array into fixed-size batches). Python's `more-itertools.chunked`, JavaScript's `lodash.chunk`, or a generator expression is the standard replacement.",
+    ),
+    (
+        "manual-retry",
+        |c| {
+            // Look for a retry loop: a function named retry/withRetry/retryN that contains a loop + sleep/delay/wait
+            let has_retry_fn = contains_word(c, "retry") || contains_word(c, "withRetry") || contains_word(c, "retryRequest");
+            let has_loop = c.contains("for (") || c.contains("while (") || c.contains("for i in");
+            let has_sleep = c.contains("sleep") || c.contains("setTimeout") || c.contains("await new Promise") || c.contains("time.sleep");
+            has_retry_fn && has_loop && has_sleep
+        },
+        "Detected a manual retry-with-backoff implementation. The `tenacity` library (Python), `async-retry` (Node.js), or `tokio-retry` (Rust) handle retries, backoff, and jitter correctly with much less code.",
+    ),
+    (
+        "manual-memoize",
+        |c| {
+            let has_memoize_fn = contains_word(c, "memoize") || contains_word(c, "memoisation") || contains_word(c, "memo");
+            let has_cache_map = c.contains("new Map") || c.contains("= {}") || c.contains("cache[");
+            has_memoize_fn && has_cache_map
+        },
+        "Detected a custom memoization helper. Use `lodash.memoize` (JS/TS), Python's `functools.lru_cache` or `functools.cache` decorator, or Rust's `once_cell::sync::Lazy` for one-time initialization.",
+    ),
+    (
+        "manual-flatten",
+        |c| {
+            // Custom flatten: function named flatten that uses concat or reduce
+            (contains_word(c, "flatten") || contains_word(c, "flatMap"))
+                && (c.contains(".reduce(") || c.contains(".concat(") || c.contains("[].concat"))
+                && (c.contains("function flatten") || c.contains("const flatten =") || c.contains("def flatten"))
+        },
+        "Detected a custom `flatten` function. Use `Array.prototype.flat()` (all modern environments) or `Array.prototype.flatMap()` for a one-step map+flatten.",
+    ),
+    (
+        "manual-event-emitter",
+        |c| {
+            // Custom event system with on/emit/off pattern
+            let has_on = c.contains(".on(") || c.contains("addEventListener");
+            let has_emit = contains_word(c, "emit") || contains_word(c, "dispatch");
+            let has_listeners_map = c.contains("listeners") || c.contains("handlers") || c.contains("subscribers");
+            has_on && has_emit && has_listeners_map
+                && (c.contains("function EventEmitter") || c.contains("class EventEmitter")
+                    || c.contains("class EventBus") || c.contains("const emitter"))
+        },
+        "Detected a custom EventEmitter/EventBus implementation. Node.js ships `require('events').EventEmitter`; for the browser use `EventTarget` (native) or `mitt` (600-byte zero-dep package).",
+    ),
+    (
+        "manual-sleep",
+        |c| {
+            // sleep helper: const sleep = ms => new Promise(...)
+            (contains_word(c, "sleep") || contains_word(c, "delay") || contains_word(c, "wait"))
+                && c.contains("new Promise")
+                && (c.contains("setTimeout") || c.contains("resolve"))
+                && (c.contains("const sleep") || c.contains("function sleep")
+                    || c.contains("const delay") || c.contains("function delay")
+                    || c.contains("const wait") || c.contains("function wait"))
+        },
+        "Detected a hand-rolled `sleep`/`delay` helper (`new Promise(r => setTimeout(r, ms))`). This is fine as a one-liner inline, but if it appears in a utility file the package `delay` (npm) is a zero-config drop-in.",
+    ),
+    (
+        "manual-is-empty",
+        |c| {
+            // Custom isEmpty checking Object.keys length or array length
+            (contains_word(c, "isEmpty") || contains_word(c, "is_empty"))
+                && (c.contains("Object.keys(") || c.contains(".length === 0") || c.contains(".length == 0"))
+                && (c.contains("function isEmpty") || c.contains("const isEmpty ="))
+        },
+        "Detected a custom `isEmpty` utility. Lodash provides `_.isEmpty(value)` which handles arrays, objects, strings, Maps, and Sets uniformly. Alternatively, `Object.keys(obj).length === 0` inline is idiomatic for plain objects.",
+    ),
+    (
+        "python-retry",
+        |c| {
+            // Python: manual try/except with loop and time.sleep — typical retry pattern
+            let has_loop = c.contains("for _ in range") || c.contains("while True") || c.contains("for attempt");
+            let has_sleep = c.contains("time.sleep");
+            let has_except = c.contains("except ") && c.contains("except:");
+            has_loop && has_sleep && (c.contains("except ") || has_except)
+        },
+        "Detected a Python manual retry loop with `time.sleep`. The `tenacity` library (`pip install tenacity`) provides battle-tested retry logic with decorators, exponential back-off, and jitter in a few lines.",
     ),
 ];
 
@@ -208,16 +282,26 @@ const ROLL_YOUR_OWN_PATTERNS: &[(&str, PatternMatcher, &str)] = &[
 /// in `ROLL_YOUR_OWN_PATTERNS`.
 pub fn detect_roll_your_own(code: &str, language_id: &str) -> Vec<&'static str> {
     // Language filter: skip patterns that don't apply.
-    // (For now all patterns are JS/TS-flavored; Python only matches chunk.)
     let applicable: &[&str] = match language_id {
-        "py" | "python" => &["manual-chunking"],
-        "js" | "javascript" | "ts" | "typescript" | "tsx" => &[
+        "py" | "python" => &[
+            "manual-chunking",
+            "manual-memoize",
+            "manual-retry",
+            "python-retry",
+        ],
+        "js" | "javascript" | "ts" | "typescript" | "tsx" | "jsx" => &[
             "debounce",
             "throttle",
             "deep-clone-via-json",
             "deep-clone-named",
             "uuid-by-hand",
             "manual-chunking",
+            "manual-retry",
+            "manual-memoize",
+            "manual-flatten",
+            "manual-event-emitter",
+            "manual-sleep",
+            "manual-is-empty",
         ],
         _ => &[],
     };
