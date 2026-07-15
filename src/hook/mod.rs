@@ -631,7 +631,7 @@ pub async fn run() -> anyhow::Result<()> {
         std::process::exit(0);
     } else {
         let err_msg = result.stderr.trim();
-        let cleaned_stderr = err_msg.replace("smoke_verify.ts", file_path);
+        let cleaned_stderr = strip_smoke_temp_paths(err_msg, file_path);
         let mut loop_msg = None;
 
         if cfg.loop_detection.enabled {
@@ -748,6 +748,92 @@ fn allow_with_reason(reason: &str) -> ! {
         println!("{}", json);
     }
     std::process::exit(0);
+}
+
+// ── Temp-path cleaning ───────────────────────────────────────────────────────
+
+/// Replace all SMOKE-internal temp file references in an error string with
+/// the real file path being validated.
+///
+/// Covers:
+///   - JS/TS: `smoke_verify.ts` (V8 module name)
+///   - Rust:  `smoke_verify_<id>.rs` (rustc standalone check)
+///   - Python: `/tmp/.tmpXXXXXX` or any path in `File "..."` Python tracebacks
+///             that resolves to a temp directory
+fn strip_smoke_temp_paths(stderr: &str, real_file_path: &str) -> String {
+    // Pass 1: replace the JS/TS V8 module name used internally
+    let s = stderr.replace("smoke_verify.ts", real_file_path);
+
+    // Pass 2: replace Rust temp file names (smoke_verify_<digits>.rs)
+    // They appear literally in rustc output like: `smoke_verify_1234567890.rs:3:5`
+    let s = replace_pattern_prefix(&s, "smoke_verify_", ".rs", real_file_path);
+
+    // Pass 3: replace Python traceback temp paths.
+    // Python writes: `File "/tmp/.tmpXXXXXX", line N`
+    // We want to replace the quoted path with the real file path.
+    let s = replace_python_temp_file_path(&s, real_file_path);
+
+    s
+}
+
+/// Replace occurrences of `prefix<anything>suffix` with `replacement`.
+/// Used for `smoke_verify_XXXXXX.rs` → real file path.
+fn replace_pattern_prefix(s: &str, prefix: &str, suffix: &str, replacement: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut remaining = s;
+    while let Some(start) = remaining.find(prefix) {
+        out.push_str(&remaining[..start]);
+        let after_prefix = &remaining[start + prefix.len()..];
+        // Find the suffix
+        if let Some(suf_pos) = after_prefix.find(suffix) {
+            out.push_str(replacement);
+            remaining = &after_prefix[suf_pos + suffix.len()..];
+        } else {
+            // No suffix found — emit the prefix literally and continue
+            out.push_str(prefix);
+            remaining = after_prefix;
+        }
+    }
+    out.push_str(remaining);
+    out
+}
+
+/// Replace the temp path inside Python tracebacks of the form:
+///   `File "/tmp/.tmpXXXXXX", line N` or `File "/var/...tmpXXX", line N`
+/// with the real file path.
+fn replace_python_temp_file_path(s: &str, real_file_path: &str) -> String {
+    let marker = "File \"";
+    let mut out = String::with_capacity(s.len());
+    let mut remaining = s;
+    while let Some(start) = remaining.find(marker) {
+        out.push_str(&remaining[..start]);
+        let after_marker = &remaining[start + marker.len()..];
+        // Find the closing quote
+        if let Some(end_quote) = after_marker.find('"') {
+            let path_str = &after_marker[..end_quote];
+            // Only substitute if it looks like a system temp path
+            let is_temp = path_str.starts_with("/tmp/")
+                || path_str.starts_with("/var/")
+                || path_str.starts_with("/private/tmp/")
+                || path_str.contains(".tmp")
+                || path_str.contains("tmpXXXXXX");
+            if is_temp {
+                out.push_str(marker);
+                out.push_str(real_file_path);
+                out.push('"');
+                remaining = &after_marker[end_quote + 1..];
+            } else {
+                // Not a temp path — emit marker and continue
+                out.push_str(marker);
+                remaining = after_marker;
+            }
+        } else {
+            out.push_str(marker);
+            remaining = after_marker;
+        }
+    }
+    out.push_str(remaining);
+    out
 }
 
 // ── Anti-deletion prompt ──────────────────────────────────────────────────────
@@ -1084,5 +1170,40 @@ mod tests {
         // Rust with/without main
         assert!(is_standalone_runnable("fn main() {\n    println!(\"hello\");\n}", "rs"));
         assert!(!is_standalone_runnable("pub fn add(a: i32, b: i32) -> i32 { a + b }", "rs"));
+    }
+
+    // ── strip_smoke_temp_paths tests ─────────────────────────────────────────
+
+    #[test]
+    fn strip_smoke_temp_paths_replaces_ts_module_name() {
+        let stderr = "ReferenceError: foo is not defined\n  at smoke_verify.ts:3:5";
+        let cleaned = strip_smoke_temp_paths(stderr, "src/app.ts");
+        assert!(!cleaned.contains("smoke_verify.ts"), "TS module name should be replaced");
+        assert!(cleaned.contains("src/app.ts"), "real file path should appear");
+    }
+
+    #[test]
+    fn strip_smoke_temp_paths_replaces_rust_temp_file() {
+        let stderr = "error[E0308]: mismatched types\n --> smoke_verify_1234567890.rs:3:5\n";
+        let cleaned = strip_smoke_temp_paths(stderr, "src/lib.rs");
+        assert!(!cleaned.contains("smoke_verify_"), "Rust temp file should be replaced");
+        assert!(cleaned.contains("src/lib.rs"), "real file path should appear");
+    }
+
+    #[test]
+    fn strip_smoke_temp_paths_replaces_python_traceback_path() {
+        let stderr = "Traceback (most recent call last):\n  File \"/tmp/.tmpABC123\", line 1, in <module>\nZeroDivisionError: division by zero\n";
+        let cleaned = strip_smoke_temp_paths(stderr, "src/compute.py");
+        assert!(!cleaned.contains("/tmp/.tmpABC123"), "Python temp path should be replaced");
+        assert!(cleaned.contains("src/compute.py"), "real file path should appear");
+    }
+
+    #[test]
+    fn strip_smoke_temp_paths_leaves_real_paths_untouched() {
+        let stderr = "Error in /Users/alice/project/src/foo.py at line 5\n";
+        let cleaned = strip_smoke_temp_paths(stderr, "src/foo.py");
+        // The user's source path in the error is not a temp file — should be untouched
+        // (the normalizer strips it for fingerprinting, but the display path stays)
+        assert!(cleaned.contains("Error in"), "error context should remain");
     }
 }

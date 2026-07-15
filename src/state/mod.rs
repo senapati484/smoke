@@ -189,7 +189,7 @@ pub fn normalize_error_message(raw: &str) -> String {
                 continue;
             }
         }
-        
+
         // Strip :\d+
         if chars[i] == ':' && i + 1 < chars.len() && chars[i+1].is_ascii_digit() {
             let mut j = i + 1;
@@ -267,10 +267,28 @@ pub fn normalize_error_message(raw: &str) -> String {
         i += 1;
     }
 
+    // Pass 3: Strip hex memory addresses (0x[0-9a-fA-F]+)
+    let s3 = strip_hex_addresses(&s2);
+
+    // Pass 4: Strip absolute file paths (/tmp/…, /var/…, /Users/…, /home/…, C:\…)
+    let s4 = strip_absolute_paths(&s3);
+
+    // Pass 5: Strip smoke temp filenames that leak into error messages
+    let s5 = strip_smoke_temp_names(&s4);
+
+    // Pass 6: Strip Unix epoch timestamps (standalone 10-digit numbers)
+    let s6 = strip_epoch_timestamps(&s5);
+
+    // Pass 7: Strip process IDs (pid=\d+, pid \d+, [pid \d+])
+    let s7 = strip_pids(&s6);
+
+    // Pass 8: Strip numeric values in "expected N" / "got N" patterns
+    let s8 = strip_expected_got_numbers(&s7);
+
     // Lowercase, collapse whitespace, truncate to 200 chars.
     let mut collapsed = String::new();
     let mut last_was_space = false;
-    for c in s2.to_lowercase().chars() {
+    for c in s8.to_lowercase().chars() {
         if c.is_whitespace() {
             if !last_was_space {
                 collapsed.push(' ');
@@ -281,13 +299,246 @@ pub fn normalize_error_message(raw: &str) -> String {
             last_was_space = false;
         }
     }
-    
+
     let trimmed = collapsed.trim().to_string();
     if trimmed.len() > 200 {
         trimmed[..200].to_string()
     } else {
         trimmed
     }
+}
+
+// ── Normalization helpers (called by normalize_error_message) ─────────────────
+
+/// Replace `0x[0-9a-fA-F]+` with `0x...`.
+fn strip_hex_addresses(s: &str) -> String {
+    let bytes = s.as_bytes();
+    let mut out = String::with_capacity(s.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if i + 1 < bytes.len() && bytes[i] == b'0' && (bytes[i + 1] == b'x' || bytes[i + 1] == b'X') {
+            let start = i + 2;
+            let mut j = start;
+            while j < bytes.len() && bytes[j].is_ascii_hexdigit() {
+                j += 1;
+            }
+            if j > start {
+                // Only replace if there were actual hex digits
+                out.push_str("0x...");
+                i = j;
+                continue;
+            }
+        }
+        out.push(s[i..].chars().next().unwrap_or('\0'));
+        i += s[i..].chars().next().map(|c| c.len_utf8()).unwrap_or(1);
+    }
+    out
+}
+
+/// Replace absolute file paths with `<path>`.
+/// Handles Unix paths starting with `/tmp/`, `/var/`, `/Users/`, `/home/`, `/private/`
+/// and Windows paths starting with a drive letter `C:\` or `D:\`.
+fn strip_absolute_paths(s: &str) -> String {
+    let prefixes: &[&str] = &["/tmp/", "/var/", "/Users/", "/home/", "/private/", "/opt/", "/root/"];
+    let mut out = String::with_capacity(s.len());
+    let chars: Vec<char> = s.chars().collect();
+    let mut i = 0;
+    while i < chars.len() {
+        // Unix prefix match
+        let remaining: String = chars[i..].iter().collect();
+        let mut matched = false;
+        for prefix in prefixes {
+            if remaining.starts_with(prefix) {
+                // Consume until whitespace, comma, colon (before digit), closing paren/bracket, or end
+                let mut j = i + prefix.chars().count();
+                while j < chars.len() {
+                    let c = chars[j];
+                    if c.is_whitespace() || c == ',' || c == ')' || c == ']' || c == '\'' || c == '"' {
+                        break;
+                    }
+                    // Stop at `:N` (line number) — keep the colon in output
+                    if c == ':' && j + 1 < chars.len() && chars[j + 1].is_ascii_digit() {
+                        break;
+                    }
+                    j += 1;
+                }
+                out.push_str("<path>");
+                i = j;
+                matched = true;
+                break;
+            }
+        }
+        if matched {
+            continue;
+        }
+        // Windows drive path: `C:\` or `D:\`
+        if i + 2 < chars.len()
+            && chars[i].is_ascii_alphabetic()
+            && chars[i + 1] == ':'
+            && (chars[i + 2] == '\\' || chars[i + 2] == '/')
+        {
+            let mut j = i + 3;
+            while j < chars.len() {
+                let c = chars[j];
+                if c.is_whitespace() || c == ',' || c == ')' || c == ']' || c == '\'' || c == '"' {
+                    break;
+                }
+                if c == ':' && j + 1 < chars.len() && chars[j + 1].is_ascii_digit() {
+                    break;
+                }
+                j += 1;
+            }
+            out.push_str("<path>");
+            i = j;
+            continue;
+        }
+        out.push(chars[i]);
+        i += 1;
+    }
+    out
+}
+
+/// Replace smoke internal temp filenames with `<tempfile>`.
+/// Covers: `smoke_verify.ts`, `smoke_verify.js`, `smoke_XXXXXXXX.py`, `smoke_XXXXXXXX.rs`
+fn strip_smoke_temp_names(s: &str) -> String {
+    // Simple prefix-based replacement: any word starting with "smoke_verify" or "smoke_"
+    // followed by alphanumeric chars and an extension we care about.
+    let mut out = String::with_capacity(s.len());
+    let chars: Vec<char> = s.chars().collect();
+    let mut i = 0;
+    while i < chars.len() {
+        let remaining: String = chars[i..].iter().collect();
+        if remaining.starts_with("smoke_") {
+            // Consume the whole filename token
+            let mut j = i + 6; // past "smoke_"
+            while j < chars.len() && (chars[j].is_alphanumeric() || chars[j] == '_' || chars[j] == '.') {
+                j += 1;
+            }
+            out.push_str("<tempfile>");
+            i = j;
+            continue;
+        }
+        out.push(chars[i]);
+        i += 1;
+    }
+    out
+}
+
+/// Replace standalone 10-digit Unix epoch timestamps with `<ts>`.
+/// A "standalone" number is one not immediately preceded or followed by another digit.
+fn strip_epoch_timestamps(s: &str) -> String {
+    let chars: Vec<char> = s.chars().collect();
+    let mut out = String::with_capacity(s.len());
+    let mut i = 0;
+    while i < chars.len() {
+        if chars[i].is_ascii_digit() {
+            // Count consecutive digits
+            let start = i;
+            let mut j = i;
+            while j < chars.len() && chars[j].is_ascii_digit() {
+                j += 1;
+            }
+            let digit_count = j - start;
+            // Check boundaries
+            let before_ok = start == 0 || !chars[start - 1].is_ascii_digit();
+            let after_ok = j >= chars.len() || !chars[j].is_ascii_digit();
+            // Only replace 10-digit numbers (Unix epoch range: ~1e9 to ~2e9)
+            if digit_count == 10 && before_ok && after_ok {
+                // Verify it starts with 1 or 2 (valid epoch range)
+                if chars[start] == '1' || chars[start] == '2' {
+                    out.push_str("<ts>");
+                    i = j;
+                    continue;
+                }
+            }
+            // Not an epoch timestamp — emit as-is
+            for c in &chars[start..j] {
+                out.push(*c);
+            }
+            i = j;
+            continue;
+        }
+        out.push(chars[i]);
+        i += 1;
+    }
+    out
+}
+
+/// Replace PID patterns with `pid=<N>`.
+/// Handles: `pid=\d+`, `pid \d+`, `[pid \d+]`
+fn strip_pids(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let chars: Vec<char> = s.chars().collect();
+    let mut i = 0;
+    'outer: while i < chars.len() {
+        let remaining: String = chars[i..].iter().collect();
+        let lower = remaining.to_lowercase();
+        // Match `pid=\d+` or `pid \d+`
+        for sep in ["pid=", "pid "] {
+            if lower.starts_with(sep) {
+                let after_prefix = i + sep.len();
+                // Optional `[` before digits
+                let digit_start = if after_prefix < chars.len() && chars[after_prefix] == '[' {
+                    after_prefix + 1
+                } else {
+                    after_prefix
+                };
+                if digit_start < chars.len() && chars[digit_start].is_ascii_digit() {
+                    let mut j = digit_start;
+                    while j < chars.len() && chars[j].is_ascii_digit() {
+                        j += 1;
+                    }
+                    // Consume optional closing `]`
+                    if j < chars.len() && chars[j] == ']' {
+                        j += 1;
+                    }
+                    out.push_str("pid=<N>");
+                    i = j;
+                    continue 'outer;
+                }
+            }
+        }
+        out.push(chars[i]);
+        i += 1;
+    }
+    out
+}
+
+/// Replace numeric values in `expected N` / `got N` patterns with a placeholder.
+/// e.g. `expected 5, got 3` → `expected N, got N`
+fn strip_expected_got_numbers(s: &str) -> String {
+    let keywords: &[&str] = &["expected ", "got ", "found ", "actual "];
+    let mut out = String::with_capacity(s.len());
+    let chars: Vec<char> = s.chars().collect();
+    let mut i = 0;
+    while i < chars.len() {
+        let remaining: String = chars[i..].iter().collect();
+        let lower = remaining.to_lowercase();
+        let mut matched = false;
+        for kw in keywords {
+            if lower.starts_with(kw) {
+                let after_kw = i + kw.len();
+                if after_kw < chars.len() && chars[after_kw].is_ascii_digit() {
+                    // Emit the keyword
+                    out.push_str(&chars[i..i + kw.len()].iter().collect::<String>());
+                    // Skip the number
+                    let mut j = after_kw;
+                    while j < chars.len() && chars[j].is_ascii_digit() {
+                        j += 1;
+                    }
+                    out.push('N');
+                    i = j;
+                    matched = true;
+                    break;
+                }
+            }
+        }
+        if !matched {
+            out.push(chars[i]);
+            i += 1;
+        }
+    }
+    out
 }
 
 pub fn escalation_for(count: u32, warn_threshold: u32, escalate_threshold: u32) -> EscalationLevel {
@@ -305,6 +556,81 @@ pub fn escalation_for(count: u32, warn_threshold: u32, escalate_threshold: u32) 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_normalize_hex_addresses() {
+        // Two errors differing only by heap address should get the same fingerprint
+        let e1 = "TypeError: Cannot read property of null (0x7f3a4b0c8d00)";
+        let e2 = "TypeError: Cannot read property of null (0x7f3a4b0c8001)";
+        assert_eq!(normalize_error_message(e1), normalize_error_message(e2),
+            "hex addresses must normalize identically");
+
+        // Should NOT replace non-hex tokens that happen to start with 0x (edge: short)
+        let e3 = "value 0x is fine";
+        assert!(normalize_error_message(e3).contains("0x"),
+            "bare '0x' with no hex digits after should be left alone");
+    }
+
+    #[test]
+    fn test_normalize_absolute_paths() {
+        let e1 = "/tmp/smoke_abc123.py: SyntaxError at line 1";
+        let e2 = "/tmp/smoke_xyz999.py: SyntaxError at line 1";
+        assert_eq!(normalize_error_message(e1), normalize_error_message(e2),
+            "different temp paths in same error must normalize identically");
+
+        let e3 = "error in /Users/alice/project/foo.py at line 5";
+        let e4 = "error in /Users/bob/project/foo.py at line 5";
+        assert_eq!(normalize_error_message(e3), normalize_error_message(e4),
+            "/Users/<user>/... paths should normalize identically");
+    }
+
+    #[test]
+    fn test_normalize_smoke_temp_names() {
+        let e1 = "ReferenceError: foo is not defined\n  at smoke_verify.ts:3:5";
+        let e2 = "ReferenceError: foo is not defined\n  at smoke_verify.ts:99:12";
+        assert_eq!(normalize_error_message(e1), normalize_error_message(e2),
+            "smoke temp filename with differing line/col must normalize identically");
+
+        let e3 = "File smoke_a1b2c3d4.py, line 1, in <module>";
+        let e4 = "File smoke_99887766.py, line 1, in <module>";
+        assert_eq!(normalize_error_message(e3), normalize_error_message(e4),
+            "smoke Python temp filenames must normalize identically");
+    }
+
+    #[test]
+    fn test_normalize_epoch_timestamps() {
+        let e1 = "Process exited at 1720000001";
+        let e2 = "Process exited at 1720099999";
+        assert_eq!(normalize_error_message(e1), normalize_error_message(e2),
+            "10-digit epoch timestamps must normalize identically");
+
+        // Short numbers should not be affected
+        let e3 = "error code 42";
+        assert!(normalize_error_message(e3).contains("42") || normalize_error_message(e3).contains("n"),
+            "small numbers should not be stripped as timestamps");
+    }
+
+    #[test]
+    fn test_normalize_pids() {
+        let e1 = "child process pid=12345 exited with code 1";
+        let e2 = "child process pid=99999 exited with code 1";
+        assert_eq!(normalize_error_message(e1), normalize_error_message(e2),
+            "different PIDs must normalize identically");
+    }
+
+    #[test]
+    fn test_normalize_expected_got_numbers() {
+        let e1 = "AssertionError: expected 5, got 3";
+        let e2 = "AssertionError: expected 10, got 7";
+        assert_eq!(normalize_error_message(e1), normalize_error_message(e2),
+            "different expected/got values must normalize identically");
+
+        // Ensure non-numeric got/expected are untouched
+        let e3 = "expected boolean, got string";
+        let n3 = normalize_error_message(e3);
+        assert!(n3.contains("boolean") || n3.contains("string"),
+            "expected/got with non-numeric values should keep them");
+    }
 
     #[test]
     fn test_normalize_error_message() {

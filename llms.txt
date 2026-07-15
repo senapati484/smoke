@@ -12,9 +12,13 @@
 - [src/config/mod.rs](file:///Users/sayansenapati/Desktop/Dev/Innovation/smoke/src/config/mod.rs): Layered configuration loading and merging.
 - [src/install/mod.rs](file:///Users/sayansenapati/Desktop/Dev/Innovation/smoke/src/install/mod.rs): Indempotent auto-installer for tool settings.
 
+## Documentation
+- [docs/TERMINAL-AIS.md](file:///Users/sayansenapati/Desktop/Dev/Innovation/smoke/docs/TERMINAL-AIS.md): Integration guide for terminal and editor AIs (Claude Code, Cursor, Windsurf, Cline/Roo Code, Aider, etc.).
+
 ## Key Concepts
 - **Advisor Mode**: Default mode. Prints warnings to the terminal and returns them in Claude Code's `additionalContext` without blocking.
 - **Strict Mode**: Blocks writes (exits with code 2) on syntax or sandbox execution errors only when the file is identified as a standalone runnable program.
 - **Silent Mode**: Allows all writes silently without running any checks.
 - **Loop / Repeated-Failure Detection**: Scoped per Claude Code `session_id`, normalized failure signatures are stored in `~/.smoke/state/<session_id>.json` to warn or escalate when loops are detected.
 - **Fail-Open Policy**: Any internal error (disk I/O, parsing, disabled engines) defaults to allowing the write with zero blocking.
+
